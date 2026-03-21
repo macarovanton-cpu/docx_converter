@@ -75,13 +75,13 @@ def get_template(use_drive: bool, drive_file_id: str, local_path: str) -> str | 
 # Замени DRIVE_FILE_ID на реальные ID файлов из адресной строки Google Drive
 DOC_TYPES = {
     "📄 Письмо / Сопроводительное письмо": {
-        "drive_id":    "ВСТАВЬ_ID_ФАЙЛА_letter_template",   # ← заменить
+        "drive_id":    "1FdPo8Ddo317ZYoPzraCTy5R4E72Ieqba",   # ← заменить
         "local_path":  r"C:\Users\tonik\Desktop\docx_converter\template.docx",
         "output_name": "letter",
         "hint": "Структура: заголовок `# Название`, блок `**Кому:**`, разделы `## ...`, подпись `С уважением,`"
     },
     "📋 Пояснительная записка": {
-        "drive_id":    "ВСТАВЬ_ID_ФАЙЛА_pz_template",       # ← заменить
+        "drive_id":    "1FdPo8Ddo317ZYoPzraCTy5R4E72Ieqba",       # ← заменить
         "local_path":  r"C:\Users\tonik\Desktop\docx_converter\template.docx",
         "output_name": "pz",
         "hint": "Структура: заголовок `# Название`, разделы `## 1. ...`, подразделы `### 1.1. ...`, callout `!! формула !!`"
