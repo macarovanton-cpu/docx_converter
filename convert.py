@@ -523,17 +523,15 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
                 line = line.strip()
                 if not line: continue
                 is_num = bool(re.match(r'^\d+\.', line))
-style_name = 'List Number' if is_num else 'List Bullet'
-
-# Создаём стиль если его нет в шаблоне
-if style_name not in [s.name for s in doc.styles]:
-    from docx.enum.style import WD_STYLE_TYPE
-    new_style = doc.styles.add_style(
-        style_name, WD_STYLE_TYPE.PARAGRAPH
-    )
-    new_style.base_style = doc.styles['Normal']
-
-p = doc.add_paragraph(style=style_name)
+                style_name = 'List Number' if is_num else 'List Bullet'
+                # Создаём стиль если его нет в шаблоне
+                if style_name not in [s.name for s in doc.styles]:
+                    from docx.enum.style import WD_STYLE_TYPE
+                    new_style = doc.styles.add_style(
+                        style_name, WD_STYLE_TYPE.PARAGRAPH
+                    )
+                    new_style.base_style = doc.styles['Normal']
+                p = doc.add_paragraph(style=style_name)
                 p.paragraph_format.left_indent       = Cm(1.5)
                 p.paragraph_format.first_line_indent = Cm(-0.75)
                 p.paragraph_format.space_after       = Pt(4)
