@@ -8,6 +8,7 @@ file_converter.py
 
 import io
 import re
+from html import unescape as html_unescape
 from typing import Optional
 
 
@@ -17,22 +18,52 @@ from typing import Optional
 
 def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
     """
-    Конвертирует DOCX в Markdown.
-    Заголовки определяются по:
-      1. Стилю Word (Heading 1 / 2 / 3)
-      2. Жирный + крупный шрифт (если стилей нет)
+    Конвертирует DOCX в Markdown с помощью mammoth.
+    Изображения извлекаются через python-docx (не через mammoth).
     Возвращает (md_text, images).
     images = список (image_filename, image_bytes)
     """
+    import mammoth
     from docx import Document
-    from docx.shared import Pt
 
-    doc = Document(io.BytesIO(file_bytes))
-    lines = []
+    style_map = "\n".join([
+        "p[style-name='Title'] => h1:fresh",
+        "p[style-name='Heading 1'] => h1:fresh",
+        "p[style-name='Heading 2'] => h2:fresh",
+        "p[style-name='Heading 3'] => h3:fresh",
+        "p[style-name='Название'] => h1:fresh",
+        "p[style-name='Заголовок 1'] => h1:fresh",
+        "p[style-name='Заголовок 2'] => h2:fresh",
+        "p[style-name='Заголовок 3'] => h3:fresh",
+    ])
+
+    try:
+        doc = Document(io.BytesIO(file_bytes))
+        images = _extract_images_from_docx(doc)
+    except Exception:
+        images = []
+
+    try:
+        result = mammoth.convert_to_html(
+            io.BytesIO(file_bytes),
+            style_map=style_map,
+        )
+        md_text = _html_to_md(result.value)
+    except Exception as e:
+        return (
+            f"❌ Не удалось извлечь текст из DOCX: {e}\n\n"
+            "Попробуйте сохранить документ заново через Файл → Сохранить как.",
+            [],
+        )
+
+    md_text = _postprocess_md(md_text)
+    return md_text, images
+
+
+def _extract_images_from_docx(doc) -> list[tuple[str, bytes]]:
+    """Извлекает изображения из python-docx Document через rels."""
     images = []
-    image_counter = [0]
-
-    # Собираем изображения из документа
+    counter = 0
     for rel in doc.part.rels.values():
         if "image" in rel.reltype:
             try:
@@ -40,13 +71,127 @@ def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
                 ext = rel.target_part.content_type.split('/')[-1]
                 if ext == 'jpeg':
                     ext = 'jpg'
-                fname = f"image_{image_counter[0]}.{ext}"
+                fname = f"image_{counter}.{ext}"
                 images.append((fname, img_bytes))
-                image_counter[0] += 1
+                counter += 1
             except Exception:
                 pass
+    return images
 
-    # Среднее значение размера шрифта для эвристики
+
+def _html_to_md(html: str) -> str:
+    """Конвертирует HTML-вывод mammoth в Markdown."""
+    h = html
+
+    # Убираем inline base64-картинки
+    h = re.sub(r'<img[^>]*/?>', '', h)
+
+    # Inline-форматирование (до блочных элементов, чтобы обработать внутри таблиц/списков)
+    h = re.sub(r'<strong>(.*?)</strong>', r'**\1**', h, flags=re.DOTALL)
+    h = re.sub(r'<b>(.*?)</b>', r'**\1**', h, flags=re.DOTALL)
+    h = re.sub(r'<em>(.*?)</em>', r'*\1*', h, flags=re.DOTALL)
+    h = re.sub(r'<i>(.*?)</i>', r'*\1*', h, flags=re.DOTALL)
+    h = re.sub(r'<a href="([^"]*)">(.*?)</a>', r'[\2](\1)', h, flags=re.DOTALL)
+
+    # Таблицы
+    h = re.sub(r'<table[^>]*>(.*?)</table>', _table_match_to_md, h, flags=re.DOTALL)
+
+    # Списки
+    h = re.sub(r'<ul[^>]*>(.*?)</ul>', lambda m: _list_to_md(m.group(1), False), h, flags=re.DOTALL)
+    h = re.sub(r'<ol[^>]*>(.*?)</ol>', lambda m: _list_to_md(m.group(1), True), h, flags=re.DOTALL)
+
+    # Заголовки (с отступами для совместимости с convert.py split на \n\n)
+    for level in range(1, 4):
+        h = re.sub(
+            f'<h{level}[^>]*>(.*?)</h{level}>',
+            f'\n\n{"#" * level} \\1\n\n',
+            h,
+            flags=re.DOTALL,
+        )
+
+    # Параграфы → текст + двойной перенос
+    h = re.sub(r'<p[^>]*>(.*?)</p>', r'\1\n\n', h, flags=re.DOTALL)
+
+    h = re.sub(r'<br\s*/?>', '\n', h)
+
+    # Убираем оставшиеся HTML-теги
+    h = re.sub(r'<[^>]+>', '', h)
+
+    h = html_unescape(h)
+
+    return h
+
+
+def _table_match_to_md(match: re.Match) -> str:
+    """Конвертирует HTML <table> в markdown-таблицу."""
+    table_html = match.group(0)
+    # Убираем thead/tbody обёртки
+    table_html = re.sub(r'</?(?:thead|tbody|tfoot)[^>]*>', '', table_html)
+
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_html, re.DOTALL)
+    if not rows:
+        return ''
+
+    md_rows = []
+    for row_html in rows:
+        cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row_html, re.DOTALL)
+        cells = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+        md_rows.append('| ' + ' | '.join(cells) + ' |')
+
+    if len(md_rows) >= 1:
+        num_cols = len(re.findall(r'<t[dh][^>]*>', rows[0], re.DOTALL))
+        separator = '| ' + ' | '.join(['---'] * max(num_cols, 1)) + ' |'
+        md_rows.insert(1, separator)
+
+    return '\n' + '\n'.join(md_rows) + '\n'
+
+
+def _list_to_md(list_html: str, ordered: bool) -> str:
+    """Конвертирует содержимое <ul>/<ol> в markdown-список."""
+    items = re.findall(r'<li[^>]*>(.*?)</li>', list_html, re.DOTALL)
+    lines = []
+    for i, item in enumerate(items):
+        item = re.sub(r'<[^>]+>', '', item).strip()
+        if ordered:
+            lines.append(f'{i + 1}. {item}')
+        else:
+            lines.append(f'- {item}')
+    return '\n' + '\n'.join(lines) + '\n'
+
+
+def _postprocess_md(md_text: str) -> str:
+    """Нормализует markdown для совместимости с convert.py."""
+    lines = [line.rstrip() for line in md_text.split('\n')]
+    md_text = '\n'.join(lines)
+
+    md_text = re.sub(r'\n{3,}', '\n\n', md_text)
+
+    # Пустая строка перед заголовком
+    md_text = re.sub(r'([^\n])\n(#{1,3} )', r'\1\n\n\2', md_text)
+
+    # Пустая строка после заголовка
+    md_text = re.sub(r'(#{1,3} [^\n]+)\n([^\n#])', r'\1\n\n\2', md_text)
+
+    # Пустая строка после строки таблицы, если следом не таблица и не пустая строка
+    md_text = re.sub(r'(\|[^\n]*\|)\n(?!\||\n)', r'\1\n\n', md_text)
+
+    return md_text.strip()
+
+
+# --- Legacy: старая реализация на случай отката ---
+
+def _docx_to_md_legacy(file_bytes: bytes) -> tuple[str, list]:
+    """
+    Legacy: Конвертирует DOCX в Markdown через python-docx.
+    Сохранена как запасной вариант.
+    """
+    from docx import Document
+    from docx.shared import Pt
+
+    doc = Document(io.BytesIO(file_bytes))
+    lines = []
+    images = _extract_images_from_docx(doc)
+
     font_sizes = []
     for para in doc.paragraphs:
         for run in para.runs:
@@ -62,10 +207,8 @@ def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
 
         style_name = para.style.name if para.style else ''
 
-        # --- Определяем уровень заголовка ---
         heading_level = 0
 
-        # Способ 1: по стилю Word
         if 'Heading 1' in style_name or style_name == 'Title':
             heading_level = 1
         elif 'Heading 2' in style_name:
@@ -73,7 +216,6 @@ def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
         elif 'Heading 3' in style_name:
             heading_level = 3
 
-        # Способ 2: эвристика — жирный + крупный шрифт
         if heading_level == 0:
             run_sizes = [r.font.size.pt for r in para.runs if r.font.size]
             run_bolds = [r.bold for r in para.runs if r.text.strip()]
@@ -87,7 +229,6 @@ def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
             elif is_bold and max_size >= avg_size * 1.1:
                 heading_level = 3
 
-        # --- Формируем MD строку ---
         if heading_level == 1:
             lines.append(f'# {text}')
         elif heading_level == 2:
@@ -95,18 +236,17 @@ def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
         elif heading_level == 3:
             lines.append(f'### {text}')
         else:
-            # Обычный текст — сохраняем жирный/курсив
-            md_text = _runs_to_md(para.runs)
+            md_text = _runs_to_md_legacy(para.runs)
             if md_text.strip():
                 lines.append(md_text)
 
-        lines.append('')  # пустая строка между абзацами
+        lines.append('')
 
     return '\n'.join(lines), images
 
 
-def _runs_to_md(runs) -> str:
-    """Переводит runs параграфа в MD с сохранением bold/italic."""
+def _runs_to_md_legacy(runs) -> str:
+    """Legacy: переводит runs параграфа в MD с сохранением bold/italic."""
     result = ''
     for run in runs:
         text = run.text
