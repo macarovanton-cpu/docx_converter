@@ -86,11 +86,30 @@ def _html_to_md(html: str) -> str:
     # Убираем inline base64-картинки
     h = re.sub(r'<img[^>]*/?>', '', h)
 
-    # Inline-форматирование (до блочных элементов, чтобы обработать внутри таблиц/списков)
-    h = re.sub(r'<strong>(.*?)</strong>', r'**\1**', h, flags=re.DOTALL)
-    h = re.sub(r'<b>(.*?)</b>', r'**\1**', h, flags=re.DOTALL)
-    h = re.sub(r'<em>(.*?)</em>', r'*\1*', h, flags=re.DOTALL)
-    h = re.sub(r'<i>(.*?)</i>', r'*\1*', h, flags=re.DOTALL)
+    # Inline-форматирование через плейсхолдеры из непечатаемых символов.
+    # Это нужно, чтобы соседние <strong> и <em> не давали каскад звёздочек
+    # вида ***...***...*** на стыках, который ломает парсер convert.py.
+    BI_O, BI_C = '\x01', '\x02'  # bold-italic
+    B_O,  B_C  = '\x03', '\x04'  # bold
+    I_O,  I_C  = '\x05', '\x06'  # italic
+    # Сначала вложенные конструкции — единым маркером bold-italic
+    h = re.sub(r'<strong>\s*<em>(.*?)</em>\s*</strong>',
+               f'{BI_O}\\1{BI_C}', h, flags=re.DOTALL)
+    h = re.sub(r'<em>\s*<strong>(.*?)</strong>\s*</em>',
+               f'{BI_O}\\1{BI_C}', h, flags=re.DOTALL)
+    # Потом одиночные
+    h = re.sub(r'<strong>(.*?)</strong>', f'{B_O}\\1{B_C}', h, flags=re.DOTALL)
+    h = re.sub(r'<b>(.*?)</b>',           f'{B_O}\\1{B_C}', h, flags=re.DOTALL)
+    h = re.sub(r'<em>(.*?)</em>',         f'{I_O}\\1{I_C}', h, flags=re.DOTALL)
+    h = re.sub(r'<i>(.*?)</i>',           f'{I_O}\\1{I_C}', h, flags=re.DOTALL)
+    # Сдвиг пробела изнутри маркера наружу: "X<close>" вместо "X <close>"
+    h = re.sub(rf'(\S) ([{B_C}{I_C}{BI_C}])', r'\1\2 ', h)
+    h = re.sub(rf'([{B_O}{I_O}{BI_O}]) (\S)', r' \1\2', h)
+    # И только теперь — плейсхолдеры в markdown-маркеры
+    h = h.replace(BI_O, '***').replace(BI_C, '***')
+    h = h.replace(B_O,  '**' ).replace(B_C,  '**' )
+    h = h.replace(I_O,  '*'  ).replace(I_C,  '*'  )
+
     h = re.sub(r'<a href="([^"]*)">(.*?)</a>', r'[\2](\1)', h, flags=re.DOTALL)
 
     # Таблицы
@@ -174,6 +193,14 @@ def _postprocess_md(md_text: str) -> str:
 
     # Пустая строка после строки таблицы, если следом не таблица и не пустая строка
     md_text = re.sub(r'(\|[^\n]*\|)\n(?!\||\n)', r'\1\n\n', md_text)
+
+    # Пустая строка после строки списка перед параграфом-не-списком
+    md_text = re.sub(
+        r'((?:^- |^\d+\. )[^\n]+)\n(?!- |\d+\. |\n)',
+        r'\1\n\n',
+        md_text,
+        flags=re.MULTILINE,
+    )
 
     return md_text.strip()
 
