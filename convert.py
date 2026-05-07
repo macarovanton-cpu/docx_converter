@@ -28,6 +28,10 @@ TEXT_MUTED      = "888888"
 COLOR_YES       = "1E7A34"   # зелёный для ✓
 COLOR_NO        = "C0392B"   # красный для ✗
 
+# ПРАВКА #17: авто-замена ячеек «Да» → «✓ Да», «Нет»/«Отсутствует» → «✗ ...»
+# Установи False, если хочешь сохранять текст ячеек как есть.
+ENABLE_TABLE_SYMBOLS = True
+
 # Поля шаблона: left=2cm, right=1.5cm → рабочая ширина 17.5cm
 CONTENT_WIDTH_CM = 17.5
 
@@ -341,8 +345,13 @@ def add_table_cell_content(p, text, font_size=10):
     """
     ПРАВКА #8: Добавляет ✓/✗ перед значениями «Да»/«Нет» в ячейках таблицы.
     Применяется для любой сравнительной таблицы автоматически.
+    ПРАВКА #17: поведение управляется флагом ENABLE_TABLE_SYMBOLS.
     """
     stripped = text.strip()
+
+    if not ENABLE_TABLE_SYMBOLS:
+        parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
+        return
 
     # Проверяем начало ячейки на Да/Нет
     if re.match(r'^Да\b', stripped, re.IGNORECASE):
@@ -370,6 +379,157 @@ def add_table_cell_content(p, text, font_size=10):
         parse_inline_markdown(p, ('Отсутствует ' + rest).strip(), 'PT Sans', font_size, TEXT_DARK)
     else:
         parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
+
+
+# =============================================================================
+# ПРАВКА #13: НУМЕРАЦИЯ СПИСКОВ
+# =============================================================================
+
+def ensure_list_numbering(doc):
+    """
+    ПРАВКА #13: гарантирует наличие в numbering.xml кастомных определений
+    для bullet (•) и numbered (1. 2. 3.) списков.
+    Возвращает (bullet_num_id, numbered_num_id).
+    """
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    import copy
+
+    BULLET_ABSTRACT_ID = 100
+    NUMBERED_ABSTRACT_ID = 101
+    BULLET_NUM_ID = 100
+    NUMBERED_NUM_ID = 101
+
+    # Получаем или создаём numbering part
+    try:
+        numbering_part = doc.part.numbering_part
+    except (KeyError, AttributeError):
+        # Нет numbering part — создаём заглушку и регистрируем
+        from docx.opc.part import Part
+        from docx.opc.packuri import PackURI
+        from lxml import etree
+
+        numbering_uri = PackURI('/word/numbering.xml')
+        nsmap = {
+            'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+            'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+        }
+        numbering_xml = etree.Element(qn('w:numbering'), nsmap=nsmap)
+        content_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml'
+        part = Part(
+            numbering_uri,
+            content_type,
+            etree.tostring(numbering_xml, xml_declaration=True, encoding='UTF-8', standalone=True),
+            doc.part.package
+        )
+        doc.part.relate_to(part, RT.NUMBERING)
+        numbering_part = doc.part.numbering_part
+
+    numbering_elem = numbering_part.element
+
+    # Проверяем, не созданы ли уже наши определения
+    existing_abstract = {
+        int(a.get(qn('w:abstractNumId')))
+        for a in numbering_elem.findall(qn('w:abstractNum'))
+    }
+    if BULLET_ABSTRACT_ID in existing_abstract and NUMBERED_ABSTRACT_ID in existing_abstract:
+        return BULLET_NUM_ID, NUMBERED_NUM_ID
+
+    # --- Bullet abstractNum ---
+    if BULLET_ABSTRACT_ID not in existing_abstract:
+        abstract_bullet = OxmlElement('w:abstractNum')
+        abstract_bullet.set(qn('w:abstractNumId'), str(BULLET_ABSTRACT_ID))
+        lvl = OxmlElement('w:lvl')
+        lvl.set(qn('w:ilvl'), '0')
+        start = OxmlElement('w:start')
+        start.set(qn('w:val'), '1')
+        lvl.append(start)
+        numFmt = OxmlElement('w:numFmt')
+        numFmt.set(qn('w:val'), 'bullet')
+        lvl.append(numFmt)
+        lvlText = OxmlElement('w:lvlText')
+        lvlText.set(qn('w:val'), '•')
+        lvl.append(lvlText)
+        lvlJc = OxmlElement('w:lvlJc')
+        lvlJc.set(qn('w:val'), 'left')
+        lvl.append(lvlJc)
+        pPr = OxmlElement('w:pPr')
+        ind = OxmlElement('w:ind')
+        ind.set(qn('w:left'), '720')
+        ind.set(qn('w:hanging'), '360')
+        pPr.append(ind)
+        lvl.append(pPr)
+        rPr = OxmlElement('w:rPr')
+        rFonts = OxmlElement('w:rFonts')
+        rFonts.set(qn('w:ascii'), 'Symbol')
+        rFonts.set(qn('w:hAnsi'), 'Symbol')
+        rFonts.set(qn('w:hint'), 'default')
+        rPr.append(rFonts)
+        lvl.append(rPr)
+        abstract_bullet.append(lvl)
+        numbering_elem.append(abstract_bullet)
+
+    # --- Numbered abstractNum ---
+    if NUMBERED_ABSTRACT_ID not in existing_abstract:
+        abstract_num = OxmlElement('w:abstractNum')
+        abstract_num.set(qn('w:abstractNumId'), str(NUMBERED_ABSTRACT_ID))
+        lvl = OxmlElement('w:lvl')
+        lvl.set(qn('w:ilvl'), '0')
+        start = OxmlElement('w:start')
+        start.set(qn('w:val'), '1')
+        lvl.append(start)
+        numFmt = OxmlElement('w:numFmt')
+        numFmt.set(qn('w:val'), 'decimal')
+        lvl.append(numFmt)
+        lvlText = OxmlElement('w:lvlText')
+        lvlText.set(qn('w:val'), '%1.')
+        lvl.append(lvlText)
+        lvlJc = OxmlElement('w:lvlJc')
+        lvlJc.set(qn('w:val'), 'left')
+        lvl.append(lvlJc)
+        pPr = OxmlElement('w:pPr')
+        ind = OxmlElement('w:ind')
+        ind.set(qn('w:left'), '720')
+        ind.set(qn('w:hanging'), '360')
+        pPr.append(ind)
+        lvl.append(pPr)
+        abstract_num.append(lvl)
+        numbering_elem.append(abstract_num)
+
+    # --- num элементы (ссылки на abstractNum) ---
+    existing_num = {
+        int(n.get(qn('w:numId')))
+        for n in numbering_elem.findall(qn('w:num'))
+    }
+    if BULLET_NUM_ID not in existing_num:
+        num_bullet = OxmlElement('w:num')
+        num_bullet.set(qn('w:numId'), str(BULLET_NUM_ID))
+        abstract_ref = OxmlElement('w:abstractNumId')
+        abstract_ref.set(qn('w:val'), str(BULLET_ABSTRACT_ID))
+        num_bullet.append(abstract_ref)
+        numbering_elem.append(num_bullet)
+
+    if NUMBERED_NUM_ID not in existing_num:
+        num_numbered = OxmlElement('w:num')
+        num_numbered.set(qn('w:numId'), str(NUMBERED_NUM_ID))
+        abstract_ref = OxmlElement('w:abstractNumId')
+        abstract_ref.set(qn('w:val'), str(NUMBERED_ABSTRACT_ID))
+        num_numbered.append(abstract_ref)
+        numbering_elem.append(num_numbered)
+
+    return BULLET_NUM_ID, NUMBERED_NUM_ID
+
+
+def set_paragraph_numbering(paragraph, num_id, ilvl=0):
+    """ПРАВКА #13: привязывает абзац к numbering definition через OXML."""
+    pPr = paragraph._p.get_or_add_pPr()
+    numPr = OxmlElement('w:numPr')
+    ilvl_el = OxmlElement('w:ilvl')
+    ilvl_el.set(qn('w:val'), str(ilvl))
+    numId_el = OxmlElement('w:numId')
+    numId_el.set(qn('w:val'), str(num_id))
+    numPr.append(ilvl_el)
+    numPr.append(numId_el)
+    pPr.append(numPr)
 
 
 # =============================================================================
@@ -417,11 +577,15 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
     sn.paragraph_format.line_spacing      = 1.3   # ПРАВКА #1: было 1.2
     sn.paragraph_format.space_after       = Pt(8)  # ПРАВКА #2: было Pt(6)
 
+    # ПРАВКА #13: регистрируем numbering для bullet/numbered списков
+    bullet_num_id, numbered_num_id = ensure_list_numbering(doc)
+
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
 
     after_heading         = False
-    intro_done            = False   # ПРАВКА #4: флаг первого абзаца после H1
+    # ПРАВКА #12: единый флаг — intro-блок только сразу после H1
+    pending_intro_after_h1 = False
     last_list_paragraph   = None
     last_regular_paragraph = None  # ПРАВКА #10: для keep_with_next перед подписью
 
@@ -445,15 +609,21 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
             p.paragraph_format.space_after  = Pt(12)
             parse_inline_markdown(p, block[2:], 'PT Sans Narrow', 18, BRAND_BLUE)
             for r in p.runs: r.bold = True
+            # ПРАВКА #14: H1 не отрывается от контента ниже
+            set_keep_with_next(p)
             dec = doc.add_paragraph()
             dec.paragraph_format.space_before = Pt(0)
             dec.paragraph_format.space_after  = Pt(10)
             add_paragraph_border(dec, 'bottom', BRAND_RED, 12)
+            # ПРАВКА #14: декоративная линия тоже держится с контентом ниже
+            set_keep_with_next(dec)
             after_heading = True
-            intro_done = False   # сбрасываем при каждом H1
+            # ПРАВКА #12: intro-блок ожидается только сразу после H1
+            pending_intro_after_h1 = True
 
         # ── H2 ───────────────────────────────────────────────────────────────
         elif block.startswith('## '):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
             p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_before = Pt(20)
@@ -461,21 +631,28 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
             # ПРАВКА #3: H2 остаётся цветным 14pt
             parse_inline_markdown(p, block[3:], 'PT Sans Narrow', 14, BRAND_RED)
             for r in p.runs: r.bold = True
+            # ПРАВКА #14: H2 не отрывается от контента ниже
+            set_keep_with_next(p)
             after_heading = True
 
         # ── H3 ───────────────────────────────────────────────────────────────
         elif block.startswith('### '):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
             p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_before = Pt(14)
             p.paragraph_format.space_after  = Pt(6)
-            # ПРАВКА #3: H3 — чёрный bold 11.5pt (отличается от H2 цветом и размером)
-            parse_inline_markdown(p, block[4:], 'PT Sans Narrow', 11, TEXT_DARK)
+            # ПРАВКА #3: H3 — чёрный bold (отличается от H2 цветом и размером)
+            # ПРАВКА #15: размер 11pt → 13pt, чтобы H3 был крупнее тела (12pt)
+            parse_inline_markdown(p, block[4:], 'PT Sans Narrow', 13, TEXT_DARK)
             for r in p.runs: r.bold = True
+            # ПРАВКА #14: H3 не отрывается от контента ниже
+            set_keep_with_next(p)
             after_heading = True
 
         # ── Цитаты > ─────────────────────────────────────────────────────────
         elif block.startswith('>'):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             clean = '\n'.join([l.lstrip('> ') for l in block.split('\n')])
             p = doc.add_paragraph()
             # ПРАВКА #5: увеличен отступ, лёгкая заливка
@@ -490,12 +667,14 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Callout-врезка !! текст !! ────────────────────────────────────────
         elif is_callout_block(block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             # ПРАВКА #6: новый тип блока — оформляется как акцентная таблица
             add_callout_box(doc, block, content_width_cm)
             after_heading = False
 
         # ── Плейсхолдеры фото ────────────────────────────────────────────────
         elif is_photo_placeholder(block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
             p.paragraph_format.left_indent  = Cm(1.0)
             p.paragraph_format.space_before = Pt(10)
@@ -508,6 +687,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Стадии / ВАЖНО ───────────────────────────────────────────────────
         elif is_stage_paragraph(block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
             p.paragraph_format.left_indent  = Cm(0.75)
             p.paragraph_format.space_before = Pt(8)
@@ -519,19 +699,14 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Списки ───────────────────────────────────────────────────────────
         elif is_list_item:
+            pending_intro_after_h1 = False   # ПРАВКА #12
             for line in block.split('\n'):
                 line = line.strip()
                 if not line: continue
                 is_num = bool(re.match(r'^\d+\.', line))
-                style_name = 'List Number' if is_num else 'List Bullet'
-                # Создаём стиль если его нет в шаблоне
-                if style_name not in [s.name for s in doc.styles]:
-                    from docx.enum.style import WD_STYLE_TYPE
-                    new_style = doc.styles.add_style(
-                        style_name, WD_STYLE_TYPE.PARAGRAPH
-                    )
-                    new_style.base_style = doc.styles['Normal']
-                p = doc.add_paragraph(style=style_name)
+                # ПРАВКА #13: привязываем numbering напрямую через OXML
+                p = doc.add_paragraph()
+                set_paragraph_numbering(p, numbered_num_id if is_num else bullet_num_id)
                 p.paragraph_format.left_indent       = Cm(1.5)
                 p.paragraph_format.first_line_indent = Cm(-0.75)
                 p.paragraph_format.space_after       = Pt(4)
@@ -542,6 +717,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Таблицы ──────────────────────────────────────────────────────────
         elif block.startswith('|') and '\n|' in block:
+            pending_intro_after_h1 = False   # ПРАВКА #12
             lines = [l.strip() for l in block.split('\n')
                      if l.strip() and not re.match(r'^\|[-| ]+\|$', l.strip())]
             if not lines: continue
@@ -549,16 +725,15 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
             headers  = [c.strip() for c in lines[0].strip('|').split('|')]
             n_cols   = len(headers)
             table    = doc.add_table(rows=1, cols=n_cols)
-            table.autofit = table.allow_autofit = False
+            # ПРАВКА #16: autofit для распределения ширин по содержимому
+            table.autofit = True
+            table.allow_autofit = True
             set_table_width_dxa(table, content_width_cm)
-
-            # Пропорции колонок: 35/30/35 для 3-колоночных, равные для остальных
-            ratios     = [0.35, 0.30, 0.35] if n_cols == 3 else [1/n_cols]*n_cols
-            total_dxa  = int(content_width_cm * 567)
-            widths_dxa = [int(content_width_cm * 567 * r) for r in ratios]
-            widths_dxa[-1] = total_dxa - sum(widths_dxa[:-1])
-            for i, col in enumerate(table.columns):
-                col.width = widths_dxa[i]
+            # tblLayout=auto чтобы Word распределял ширины колонок
+            tblPr = table._tbl.find(qn('w:tblPr'))
+            tblLayout = OxmlElement('w:tblLayout')
+            tblLayout.set(qn('w:type'), 'autofit')
+            tblPr.append(tblLayout)
 
             # ПРАВКА #7: заголовочная строка — увеличена высота и шрифт
             set_row_height(table.rows[0], 560)   # ~1cm минимальная высота
@@ -611,10 +786,12 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Разделители --- ───────────────────────────────────────────────────
         elif block.startswith('---'):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             continue
 
         # ── Реквизиты «Кому / От кого» ───────────────────────────────────────
         elif is_requisites_block(block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
             p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_before = Pt(10)
@@ -632,6 +809,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Подпись «С уважением» ─────────────────────────────────────────────
         elif is_signature_block(block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
             # ПРАВКА #10: последний абзац перед подписью держим вместе с ней
             if last_regular_paragraph is not None:
                 set_keep_with_next(last_regular_paragraph)
@@ -652,10 +830,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
         # ── Обычные абзацы ────────────────────────────────────────────────────
         else:
-            # ПРАВКА #4: первый абзац после H1 — вводный с левой полосой
-            if after_heading and not intro_done:
+            # ПРАВКА #4 + ПРАВКА #12: intro-блок только сразу после H1
+            if pending_intro_after_h1:
                 add_intro_paragraph(doc, block, content_width_cm)
-                intro_done = True
+                pending_intro_after_h1 = False
                 after_heading = False
                 # Добавляем пустой параграф-отступ после врезки
                 sp = doc.add_paragraph()
