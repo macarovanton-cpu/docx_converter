@@ -382,6 +382,25 @@ def add_table_cell_content(p, text, font_size=10):
 
 
 # =============================================================================
+# ПРАВКА #18: АВТОМАТИЧЕСКИЕ ПЕРЕНОСЫ СЛОВ
+# =============================================================================
+
+def enable_auto_hyphenation(doc):
+    """
+    ПРАВКА #18: включает автоматические переносы слов на уровне документа.
+    Без этого justify создаёт большие пробелы между словами в коротких строках.
+    """
+    settings = doc.settings.element
+    existing = settings.find(qn('w:autoHyphenation'))
+    if existing is not None:
+        settings.remove(existing)
+    auto_hyphen = OxmlElement('w:autoHyphenation')
+    settings.insert(0, auto_hyphen)
+    do_not_hyphen_caps = OxmlElement('w:doNotHyphenateCaps')
+    settings.insert(1, do_not_hyphen_caps)
+
+
+# =============================================================================
 # ПРАВКА #13: НУМЕРАЦИЯ СПИСКОВ
 # =============================================================================
 
@@ -392,7 +411,6 @@ def ensure_list_numbering(doc):
     Возвращает (bullet_num_id, numbered_num_id).
     """
     from docx.opc.constants import RELATIONSHIP_TYPE as RT
-    import copy
 
     BULLET_ABSTRACT_ID = 100
     NUMBERED_ABSTRACT_ID = 101
@@ -577,6 +595,9 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
     sn.paragraph_format.line_spacing      = 1.3   # ПРАВКА #1: было 1.2
     sn.paragraph_format.space_after       = Pt(8)  # ПРАВКА #2: было Pt(6)
 
+    # ПРАВКА #18: включаем автоматические переносы слов
+    enable_auto_hyphenation(doc)
+
     # ПРАВКА #13: регистрируем numbering для bullet/numbered списков
     bullet_num_id, numbered_num_id = ensure_list_numbering(doc)
 
@@ -743,6 +764,16 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
                     cell = table.rows[0].cells[i]
                     set_cell_shading(cell, BRAND_BLUE)
                     set_cell_margins_and_borders(cell, BORDER_LIGHT, 4)
+                    # ПРАВКА #19: минимальная ширина первой колонки для длинных подписей
+                    if n_cols >= 3 and i == 0:
+                        tcPr_w = cell._tc.get_or_add_tcPr()
+                        existing_w = tcPr_w.find(qn('w:tcW'))
+                        if existing_w is not None:
+                            tcPr_w.remove(existing_w)
+                        tcW = OxmlElement('w:tcW')
+                        tcW.set(qn('w:w'), str(int(6.0 * 567)))
+                        tcW.set(qn('w:type'), 'dxa')
+                        tcPr_w.append(tcW)
                     p = cell.paragraphs[0]
                     p.paragraph_format.alignment   = WD_ALIGN_PARAGRAPH.CENTER
                     p.paragraph_format.space_after = Pt(0)
@@ -768,6 +799,16 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
                         set_cell_shading(cell, bg)
                         set_cell_margins_and_borders(cell, BORDER_LIGHT, 4)
+                        # ПРАВКА #19: минимальная ширина первой колонки для длинных подписей
+                        if n_cols >= 3 and i == 0:
+                            tcPr_w = cell._tc.get_or_add_tcPr()
+                            existing_w = tcPr_w.find(qn('w:tcW'))
+                            if existing_w is not None:
+                                tcPr_w.remove(existing_w)
+                            tcW = OxmlElement('w:tcW')
+                            tcW.set(qn('w:w'), str(int(6.0 * 567)))
+                            tcW.set(qn('w:type'), 'dxa')
+                            tcPr_w.append(tcW)
                         p = cell.paragraphs[0]
                         p.paragraph_format.space_after = Pt(0)
                         # ПРАВКА #8: автоматические ✓/✗ для Да/Нет/Отсутствует
@@ -855,6 +896,14 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
                 if i > 0: p.add_run().add_break()
                 parse_inline_markdown(p, line)
             last_regular_paragraph = p
+            # ПРАВКА #20: лид-абзац (целиком жирный) держится со следующим блоком
+            stripped_block = block.strip()
+            if (stripped_block.startswith('**')
+                    and stripped_block.endswith('**')
+                    and stripped_block.count('**') == 2):
+                set_keep_with_next(p)
+                p.paragraph_format.first_line_indent = Cm(0)
+                p.paragraph_format.space_after = Pt(2)
             after_heading = False
 
     doc.save(output_filename)
