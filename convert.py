@@ -5,6 +5,7 @@ from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING, WD_TAB_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 
 # =============================================================================
 # НАСТРОЙКИ — МЕНЯЙ ТОЛЬКО ЭТИ ТРИ СТРОКИ
@@ -181,6 +182,49 @@ def set_run_font(run, name, size_pt, color_hex, bold=False, italic=False):
         run.italic = True
 
 
+# ПРАВКА #21: обработка markdown-ссылок [text](url)
+def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
+                      bold=False, italic=False):
+    if not url or not url.strip():
+        return None
+    url = url.strip()
+    if not re.match(r'^https?://', url):
+        url = 'https://' + url
+    r_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
+    run_el = OxmlElement('w:r')
+    rPr = OxmlElement('w:rPr')
+    rFonts = OxmlElement('w:rFonts')
+    rFonts.set(qn('w:ascii'), font_name)
+    rFonts.set(qn('w:hAnsi'), font_name)
+    rPr.append(rFonts)
+    color_el = OxmlElement('w:color')
+    color_el.set(qn('w:val'), BRAND_BLUE)
+    rPr.append(color_el)
+    u = OxmlElement('w:u')
+    u.set(qn('w:val'), 'single')
+    rPr.append(u)
+    sz = OxmlElement('w:sz')
+    sz.set(qn('w:val'), str(font_size * 2))
+    rPr.append(sz)
+    szCs = OxmlElement('w:szCs')
+    szCs.set(qn('w:val'), str(font_size * 2))
+    rPr.append(szCs)
+    if bold:
+        rPr.append(OxmlElement('w:b'))
+    if italic:
+        rPr.append(OxmlElement('w:i'))
+    run_el.append(rPr)
+    t = OxmlElement('w:t')
+    t.set(qn('xml:space'), 'preserve')
+    t.text = text
+    run_el.append(t)
+    hyperlink.append(run_el)
+    paragraph._p.append(hyperlink)
+    return hyperlink
+
+
 def add_page_number_field(run):
     for ftype in ['begin', None, 'separate', 'end']:
         if ftype is None:
@@ -218,9 +262,8 @@ def is_callout_block(text):
 # INLINE MARKDOWN ПАРСЕР
 # =============================================================================
 
-def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
-                          font_color=TEXT_DARK, is_italic_base=False):
-    """Обрабатывает **жирный** и *курсив*."""
+def _parse_bold_italic(paragraph, text, font_name, font_size,
+                       font_color, is_italic_base):
     pattern = re.compile(r'(\*\*[^*\n]+?\*\*|\*(?!\*)[^*\n]+?\*(?!\*))')
     parts = pattern.split(text)
     for part in parts:
@@ -240,6 +283,29 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
         set_run_font(run, font_name, font_size, font_color,
                      bold=is_bold, italic=is_italic)
         run.text = clean_text
+
+
+def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
+                          font_color=TEXT_DARK, is_italic_base=False):
+    """Обрабатывает **жирный**, *курсив* и [ссылки](url)."""
+    # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
+    link_re = re.compile(r'(\[[^\]]+?\]\([^)]*?\))')
+    link_detail = re.compile(r'^\[([^\]]+?)\]\(([^)]*?)\)$')
+    for segment in link_re.split(text):
+        if not segment:
+            continue
+        m = link_detail.match(segment)
+        if m:
+            link_text, link_url = m.group(1), m.group(2).strip()
+            if link_url:
+                add_hyperlink_run(paragraph, link_url, link_text,
+                                  font_name, font_size)
+            else:
+                _parse_bold_italic(paragraph, link_text, font_name,
+                                   font_size, font_color, is_italic_base)
+        else:
+            _parse_bold_italic(paragraph, segment, font_name,
+                               font_size, font_color, is_italic_base)
 
 
 # =============================================================================
@@ -410,7 +476,6 @@ def ensure_list_numbering(doc):
     для bullet (•) и numbered (1. 2. 3.) списков.
     Возвращает (bullet_num_id, numbered_num_id).
     """
-    from docx.opc.constants import RELATIONSHIP_TYPE as RT
 
     BULLET_ABSTRACT_ID = 100
     NUMBERED_ABSTRACT_ID = 101
