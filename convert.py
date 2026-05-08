@@ -382,7 +382,7 @@ def add_intro_paragraph(doc, block, content_width_cm):
     tcPr.append(tcMar)
 
     p = cell.paragraphs[0]
-    p.paragraph_format.alignment  = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p.paragraph_format.alignment  = WD_ALIGN_PARAGRAPH.LEFT  # ПРАВКА #27
     p.paragraph_format.space_after = Pt(0)
     # ПРАВКА #1: межстрочный 1.3
     p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
@@ -685,7 +685,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
     sn.font.name      = 'PT Sans'
     sn.font.size      = Pt(12)
     sn.font.color.rgb = RGBColor.from_string(TEXT_DARK)
-    sn.paragraph_format.alignment         = WD_ALIGN_PARAGRAPH.JUSTIFY
+    sn.paragraph_format.alignment         = WD_ALIGN_PARAGRAPH.LEFT  # ПРАВКА #27: justify → left для читаемости с латинской терминологией
     sn.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
     sn.paragraph_format.line_spacing      = 1.3   # ПРАВКА #1: было 1.2
     sn.paragraph_format.space_after       = Pt(8)  # ПРАВКА #2: было Pt(6)
