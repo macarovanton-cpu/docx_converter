@@ -264,7 +264,8 @@ def is_callout_block(text):
 
 def _parse_bold_italic(paragraph, text, font_name, font_size,
                        font_color, is_italic_base):
-    pattern = re.compile(r'(\*\*[^*\n]+?\*\*|\*(?!\*)[^*\n]+?\*(?!\*))')
+    # ПРАВКА #22: поддержка ***bold-italic*** в inline-парсере
+    pattern = re.compile(r'(\*\*\*[^*\n]+?\*\*\*|\*\*[^*\n]+?\*\*|\*(?!\*)[^*\n]+?\*(?!\*))')
     parts = pattern.split(text)
     for part in parts:
         if not part:
@@ -273,7 +274,11 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
         is_bold   = False
         is_italic = is_italic_base
         clean_text = part
-        if part.startswith('**') and part.endswith('**') and len(part) >= 5:
+        if part.startswith('***') and part.endswith('***') and len(part) >= 7:
+            clean_text = part[3:-3]
+            is_bold = True
+            is_italic = True
+        elif part.startswith('**') and part.endswith('**') and len(part) >= 5:
             clean_text = part[2:-2]
             is_bold = True
         elif (part.startswith('*') and part.endswith('*')
@@ -287,7 +292,7 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
 
 def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                           font_color=TEXT_DARK, is_italic_base=False):
-    """Обрабатывает **жирный**, *курсив* и [ссылки](url)."""
+    """Обрабатывает ***жирный-курсив***, **жирный**, *курсив* и [ссылки](url)."""
     # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
     link_re = re.compile(r'(\[[^\]]+?\]\([^)]*?\))')
     link_detail = re.compile(r'^\[([^\]]+?)\]\(([^)]*?)\)$')
