@@ -247,6 +247,9 @@ def is_stage_paragraph(text):
 def is_photo_placeholder(text):
     return '📷' in text or '[Место для фото' in text
 
+# ПРАВКА #23: блок-картинка ![alt](src)
+_IMG_BLOCK_RE = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
+
 def is_requisites_block(text):
     return bool(re.match(r'^\*\*(Кому|От кого|Кому:|От кого:)', text))
 
@@ -311,6 +314,26 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
         else:
             _parse_bold_italic(paragraph, segment, font_name,
                                font_size, font_color, is_italic_base)
+
+
+def _add_inline_image(doc, img_bytes, content_width_cm):
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+    tmp.write(img_bytes)
+    tmp.close()
+    try:
+        from PIL import Image
+        img = Image.open(tmp.name)
+        w_px, _ = img.size
+        img.close()
+        w_cm = w_px / 96 * 2.54
+        width = Cm(min(w_cm, content_width_cm))
+    except Exception:
+        width = Cm(content_width_cm)
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run().add_picture(tmp.name, width=width)
+    os.unlink(tmp.name)
 
 
 # =============================================================================
@@ -624,7 +647,7 @@ def set_paragraph_numbering(paragraph, num_id, ilvl=0):
 # ОСНОВНАЯ ЛОГИКА КОНВЕРТАЦИИ
 # =============================================================================
 
-def convert_md_to_docx(md_text, output_filename, template_path=None):
+def convert_md_to_docx(md_text, output_filename, template_path=None, images=None):
 
     # --- Открываем шаблон или создаём чистый документ ---
     if template_path and os.path.exists(template_path):
@@ -670,6 +693,12 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
 
     # ПРАВКА #13: регистрируем numbering для bullet/numbered списков
     bullet_num_id, numbered_num_id = ensure_list_numbering(doc)
+
+    # ПРАВКА #23: позиционирование картинок по тексту
+    _images_dict = {}
+    if images:
+        for fname, img_bytes in images:
+            _images_dict[fname] = img_bytes
 
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
@@ -761,6 +790,18 @@ def convert_md_to_docx(md_text, output_filename, template_path=None):
             pending_intro_after_h1 = False   # ПРАВКА #12
             # ПРАВКА #6: новый тип блока — оформляется как акцентная таблица
             add_callout_box(doc, block, content_width_cm)
+            after_heading = False
+
+        # ── Встроенные картинки (ПРАВКА #23) ─────────────────────────────────
+        elif _images_dict and _IMG_BLOCK_RE.match(block):
+            pending_intro_after_h1 = False
+            m = _IMG_BLOCK_RE.match(block)
+            img_src = m.group(2)
+            if img_src in _images_dict:
+                _add_inline_image(doc, _images_dict[img_src], content_width_cm)
+            else:
+                p = doc.add_paragraph()
+                parse_inline_markdown(p, f'(изображение не найдено: {img_src})')
             after_heading = False
 
         # ── Плейсхолдеры фото ────────────────────────────────────────────────

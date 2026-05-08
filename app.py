@@ -55,47 +55,6 @@ DOC_TYPES = {
 }
 
 
-def insert_images_into_docx(docx_path, images):
-    if not images:
-        with open(docx_path, 'rb') as f:
-            return f.read()
-    from docx import Document
-    from docx.shared import Cm, Pt, RGBColor
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-    doc = Document(docx_path)
-    p = doc.add_paragraph()
-    pPr = p._p.get_or_add_pPr()
-    pBdr = OxmlElement('w:pBdr')
-    top = OxmlElement('w:top')
-    top.set(qn('w:val'), 'single')
-    top.set(qn('w:sz'), '4')
-    top.set(qn('w:color'), 'CCCCCC')
-    pBdr.append(top)
-    pPr.append(pBdr)
-    run = p.add_run('Изображения из исходного документа')
-    run.font.size = Pt(10)
-    run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
-    for fname, img_bytes in images:
-        try:
-            tmp_img = tempfile.NamedTemporaryFile(
-                delete=False, suffix='.' + fname.split('.')[-1])
-            tmp_img.write(img_bytes)
-            tmp_img.close()
-            p2 = doc.add_paragraph()
-            p2.add_run().add_picture(tmp_img.name, width=Cm(14))
-            os.unlink(tmp_img.name)
-        except Exception:
-            pass
-    tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-    tmp_out.close()
-    doc.save(tmp_out.name)
-    with open(tmp_out.name, 'rb') as f:
-        result = f.read()
-    os.unlink(tmp_out.name)
-    return result
-
-
 st.set_page_config(
     page_title="Тензосила — Конструктор документов",
     page_icon="⚖️",
@@ -230,10 +189,11 @@ with col_right:
 
                 convert_md_to_docx(md_text=md_text,
                                    output_filename=tmp_out.name,
-                                   template_path=template_path)
+                                   template_path=template_path,
+                                   images=source_images)
 
-                docx_bytes = insert_images_into_docx(
-                    tmp_out.name, source_images)
+                with open(tmp_out.name, 'rb') as f:
+                    docx_bytes = f.read()
 
                 os.unlink(tmp_out.name)
                 if use_drive and template_path != config["local_path"]:

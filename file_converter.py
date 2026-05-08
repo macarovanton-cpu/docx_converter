@@ -19,12 +19,10 @@ from typing import Optional
 def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
     """
     Конвертирует DOCX в Markdown с помощью mammoth.
-    Изображения извлекаются через python-docx (не через mammoth).
     Возвращает (md_text, images).
-    images = список (image_filename, image_bytes)
+    images = список (image_filename, image_bytes) в порядке появления.
     """
     import mammoth
-    from docx import Document
 
     style_map = "\n".join([
         "p[style-name='Title'] => h1:fresh",
@@ -37,16 +35,28 @@ def docx_to_md(file_bytes: bytes) -> tuple[str, list]:
         "p[style-name='Заголовок 3'] => h3:fresh",
     ])
 
-    try:
-        doc = Document(io.BytesIO(file_bytes))
-        images = _extract_images_from_docx(doc)
-    except Exception:
-        images = []
+    # ПРАВКА #23: собираем картинки через mammoth callback — порядок = позиция в тексте
+    images = []
+    counter = [0]
+
+    @mammoth.images.img_element
+    def _collect_image(image):
+        n = counter[0]
+        counter[0] += 1
+        with image.open() as f:
+            img_bytes = f.read()
+        ext = image.content_type.split('/')[-1]
+        if ext == 'jpeg':
+            ext = 'jpg'
+        fname = f'image_{n}.{ext}'
+        images.append((fname, img_bytes))
+        return {'src': fname}
 
     try:
         result = mammoth.convert_to_html(
             io.BytesIO(file_bytes),
             style_map=style_map,
+            convert_image=_collect_image,
         )
         md_text = _html_to_md(result.value)
     except Exception as e:
@@ -83,8 +93,9 @@ def _html_to_md(html: str) -> str:
     """Конвертирует HTML-вывод mammoth в Markdown."""
     h = html
 
-    # Убираем inline base64-картинки
-    h = re.sub(r'<img[^>]*/?>', '', h)
+    # ПРАВКА #23: <img src="..."> → ![alt](src) вместо удаления
+    h = re.sub(r'<img\s+src="([^"]*)"(?:\s+alt="([^"]*)")?\s*/?>',
+               lambda m: f'![{m.group(2) or ""}]({m.group(1)})', h)
 
     # Inline-форматирование через плейсхолдеры из непечатаемых символов.
     # Это нужно, чтобы соседние <strong> и <em> не давали каскад звёздочек
