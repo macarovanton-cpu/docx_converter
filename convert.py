@@ -188,6 +188,7 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
     if not url or not url.strip():
         return None
     url = url.strip()
+    url = re.sub(r'\\([._\-+~#?&=/])', r'\1', url)      # ПРАВКА #24: раскрытие markdown-экранирования в URL
     if not re.match(r'^https?://', url):
         url = 'https://' + url
     r_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
@@ -296,6 +297,7 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
 def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                           font_color=TEXT_DARK, is_italic_base=False):
     """Обрабатывает ***жирный-курсив***, **жирный**, *курсив* и [ссылки](url)."""
+    text = re.sub(r'\\([.\-+_)(:!=])', r'\1', text)      # ПРАВКА #24: раскрытие markdown-экранирования \X → X
     # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
     link_re = re.compile(r'(\[[^\]]+?\]\([^)]*?\))')
     link_detail = re.compile(r'^\[([^\]]+?)\]\(([^)]*?)\)$')
@@ -700,6 +702,14 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         for fname, img_bytes in images:
             _images_dict[fname] = img_bytes
 
+    # ПРАВКА #26: bold prefix + hard break → отдельные параграфы
+    md_text = re.sub(
+        r'^(\*\*[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
+        r'\1\n\n',
+        md_text,
+        flags=re.MULTILINE,
+    )
+
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
 
@@ -851,7 +861,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         elif block.startswith('|') and '\n|' in block:
             pending_intro_after_h1 = False   # ПРАВКА #12
             lines = [l.strip() for l in block.split('\n')
-                     if l.strip() and not re.match(r'^\|[-| ]+\|$', l.strip())]
+                     if l.strip() and not re.match(r'^\|[-|: ]+\|$', l.strip())]
             if not lines: continue
 
             headers  = [c.strip() for c in lines[0].strip('|').split('|')]
