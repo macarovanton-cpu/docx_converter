@@ -22,11 +22,18 @@ Push to `main` → Streamlit Cloud picks it up automatically. No CI step require
 
 ## Architecture
 
-Three Python modules:
+Three Python modules. `app.py` has **two UI modes**, switched via `st.segmented_control` (`app.py:607`):
 
-- **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types (label, Drive file ID, local fallback path, filename stem, Markdown hint).
-- **`convert.py`** — Core Markdown → DOCX engine (~705 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. This signature must not change — `app.py` depends on it. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, and writes the result via `python-docx`.
-- **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Used by `app.py` to pre-fill the editor when the user uploads an existing document.
+1. **`Markdown -> DOCX`** (`render_md_to_docx_mode`) — the original flow.
+2. **`Файлы -> Markdown`** (`render_files_to_markdown_mode`) — batch file→Markdown conversion.
+
+- **`app.py`** (~620 lines) — Streamlit UI.
+  - *MD→DOCX mode*: downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, serves the result as a download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict controls available document types (label, Drive file ID, local fallback path, filename stem, Markdown hint).
+  - *Files→MD mode*: batch upload of PDF/DOCX/XLSX/PPTX, per-file + shared PDF page-range inputs, PDF page diagnostics, and downloads (individual `.md`, a ZIP of all results, and a combined `.md` separated by source file).
+- **`convert.py`** — Core Markdown → DOCX engine (~1050 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. This signature must not change — `app.py` depends on it. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, and writes the result via `python-docx`.
+- **`file_converter.py`** — Reverse direction: any document → Markdown. **Two backends coexist:**
+  - **MarkItDown** (Microsoft, `markitdown[all]`) — the newer path. `convert_with_markitdown(file_path, page_range=None) → md_text` handles PDF/DOCX/XLSX/PPTX. PDF helpers: `get_pdf_page_count`, `analyze_pdf_pages` (text-layer / image-only detection), `parse_page_range("1-3, 7, 10-12") → list[int]`. Page ranges are reliable **only for PDF**; other formats convert whole. Used by the *Files→MD* mode.
+  - **In-house** — `convert_file_to_md(file_bytes, filename) → (md_text, images)` dispatches by extension to `docx_to_md` / `pdf_to_md` / `txt_to_md`. Extracts inline images. Used to pre-fill the *MD→DOCX* editor on upload. Signature is depended on by `app.py`.
 
 ## Brand constants (convert.py)
 
@@ -62,7 +69,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 ## Numbered edits convention
 
-`convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes to defaults. Current highest: **#11** (signature block page-break lock). New edits must be numbered starting at **#12** and marked the same way.
+`convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes to defaults. Current highest: **#27** (justify → left alignment for readability). New edits must be numbered starting at **#28** and marked the same way.
 
 ## Constraints
 
