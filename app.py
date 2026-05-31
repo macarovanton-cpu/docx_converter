@@ -95,6 +95,36 @@ def _build_markdown_zip(results: list[dict]) -> tuple[bytes, int, int]:
     return buffer.getvalue(), included, skipped
 
 
+def _build_combined_markdown(results: list[dict]) -> tuple[str, int, list[str]]:
+    chunks = []
+    skipped_files = []
+
+    for result in results:
+        if result.get("error") or not result.get("markdown"):
+            skipped_files.append(result["filename"])
+            continue
+
+        file_number = len(chunks) + 1
+        filename = result["filename"]
+        page_range = result.get("page_range") or "all"
+        file_type = result.get("file_type") or _file_ext(filename).upper()
+        markdown = result["markdown"].strip()
+        chunks.append(
+            f"# Файл {file_number}: {filename}\n\n"
+            f"Источник: {filename}  \n"
+            f"Диапазон страниц: {page_range}  \n"
+            f"Тип файла: {file_type}  \n\n"
+            "---\n\n"
+            f"{markdown}\n\n"
+            "---"
+        )
+
+    combined = "\n\n".join(chunks)
+    if combined:
+        combined += "\n"
+    return combined, len(chunks), skipped_files
+
+
 def _save_uploaded_to_temp(uploaded_file, ext: str) -> str:
     suffix = f".{ext}" if ext else ""
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -136,12 +166,15 @@ def _display_pdf_diagnostics(uploaded_file, ext: str):
 
 def _convert_uploaded_file(uploaded_file, page_range: str | None) -> dict:
     ext = _file_ext(uploaded_file.name)
+    display_range = page_range or "all"
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
     try:
         markdown = convert_with_markitdown(tmp_path, page_range=page_range)
         return {
             "filename": uploaded_file.name,
             "download_name": _safe_md_filename(uploaded_file.name),
+            "file_type": ext.upper() or "UNKNOWN",
+            "page_range": display_range,
             "markdown": markdown,
             "error": None,
         }
@@ -149,6 +182,8 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None) -> dict:
         return {
             "filename": uploaded_file.name,
             "download_name": _safe_md_filename(uploaded_file.name),
+            "file_type": ext.upper() or "UNKNOWN",
+            "page_range": display_range,
             "markdown": "",
             "error": str(e),
         }
@@ -347,7 +382,51 @@ def render_files_to_markdown_mode():
         st.caption("Загрузите один или несколько файлов для конвертации.")
         return
 
-    range_keys = {}
+    range_keys = {
+        idx: f"page_range_{idx}_{_safe_md_filename(uploaded_file.name)}"
+        for idx, uploaded_file in enumerate(uploaded_files)
+    }
+
+    st.markdown("#### Общий диапазон для PDF")
+    common_col, apply_col = st.columns([3, 1], vertical_alignment="bottom")
+    with common_col:
+        common_pdf_range = st.text_input(
+            "Общий диапазон страниц для PDF",
+            key="common_pdf_page_range",
+            placeholder="Например: 1-3, 7, 10-12",
+        )
+    with apply_col:
+        apply_common_range = st.button(
+            "Применить диапазон ко всем PDF",
+            use_container_width=True,
+        )
+
+    if apply_common_range:
+        normalized_common_range = _normalize_page_range(common_pdf_range)
+        pdf_count = 0
+        non_pdf_count = 0
+        if not normalized_common_range:
+            st.warning("Введите диапазон страниц для PDF.")
+        else:
+            for idx, uploaded_file in enumerate(uploaded_files):
+                if _file_ext(uploaded_file.name) == "pdf":
+                    st.session_state[range_keys[idx]] = normalized_common_range
+                    pdf_count += 1
+                else:
+                    non_pdf_count += 1
+            if pdf_count:
+                st.success(
+                    f"Диапазон {normalized_common_range} применён к PDF: "
+                    f"{pdf_count}."
+                )
+            else:
+                st.warning("Среди загруженных файлов нет PDF.")
+            if non_pdf_count:
+                st.info(
+                    "Для DOCX/XLSX/PPTX диапазоны страниц пока не "
+                    "поддержаны, эти файлы будут конвертированы целиком."
+                )
+
     st.markdown("#### Настройки файлов")
     for idx, uploaded_file in enumerate(uploaded_files):
         ext = _file_ext(uploaded_file.name)
@@ -358,11 +437,11 @@ def render_files_to_markdown_mode():
                 st.caption(f"Тип: .{ext or 'unknown'}")
                 _display_pdf_diagnostics(uploaded_file, ext)
             with range_col:
-                key = f"page_range_{idx}_{_safe_md_filename(uploaded_file.name)}"
-                range_keys[idx] = key
+                key = range_keys[idx]
+                if key not in st.session_state:
+                    st.session_state[key] = "all"
                 page_range = st.text_input(
                     "Диапазон страниц",
-                    value="all",
                     key=key,
                     help="Для PDF: 1-3, 7, 10-12. Для остальных форматов используйте all.",
                 )
@@ -403,6 +482,22 @@ def render_files_to_markdown_mode():
             file_name="markdown_results.zip",
             mime="application/zip",
             key="download_all_md_zip",
+            use_container_width=True,
+        )
+
+    combined_md, combined_count, skipped_files = _build_combined_markdown(results)
+    if skipped_files:
+        st.warning(
+            "В объединенный Markdown не включены файлы с ошибками: "
+            f"{', '.join(skipped_files)}."
+        )
+    if combined_count:
+        st.download_button(
+            "Скачать объединенный Markdown",
+            data=combined_md.encode("utf-8"),
+            file_name="combined.md",
+            mime="text/markdown",
+            key="download_combined_md",
             use_container_width=True,
         )
 
