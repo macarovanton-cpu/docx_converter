@@ -25,7 +25,7 @@ Push to `main` → Streamlit Cloud picks it up automatically. No CI step require
 Three Python modules:
 
 - **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types (label, Drive file ID, local fallback path, filename stem, Markdown hint).
-- **`convert.py`** — Core Markdown → DOCX engine (~705 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None)`. This signature must not change — `app.py` depends on it. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, and writes the result via `python-docx`.
+- **`convert.py`** — Core Markdown → DOCX engine (~705 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. This signature must not change — `app.py` depends on it. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, and writes the result via `python-docx`.
 - **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Used by `app.py` to pre-fill the editor when the user uploads an existing document.
 
 ## Brand constants (convert.py)
@@ -69,7 +69,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 - **`template.docx`** lives on Google Drive — do not add it to the repo and do not modify it.
 - **`app.py`, `file_converter.py`, `requirements.txt`, `.devcontainer/*`** — edit only on explicit request.
 - **No new `requirements.txt` dependencies** without prior agreement.
-- `convert_md_to_docx(md_text, output_filename, template_path=None)` signature is fixed.
+- `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)` signature is fixed.
 
 ## Secrets
 

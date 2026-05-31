@@ -7,9 +7,239 @@ file_converter.py
 """
 
 import io
+import os
 import re
+import tempfile
 from html import unescape as html_unescape
 from typing import Optional
+
+
+# =============================================================================
+# MarkItDown layer
+# =============================================================================
+
+PDF_IMAGE_ONLY_MESSAGE = (
+    "Возможно, выбранные страницы содержат только изображение. "
+    "Для извлечения текста потребуется OCR."
+)
+
+
+def get_pdf_page_count(file_path: str) -> int:
+    """Возвращает количество страниц в PDF."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(file_path)
+    return len(reader.pages)
+
+
+def analyze_pdf_pages(file_path: str) -> list[dict]:
+    """
+    Возвращает диагностику текстового слоя PDF по страницам.
+
+    Формат элемента:
+    {
+        "page_number": 1,
+        "has_text_layer": True,
+        "extracted_chars": 123,
+        "error": None,
+    }
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(file_path)
+    pages = []
+    for index in range(len(reader.pages)):
+        page_info = {
+            "page_number": index + 1,
+            "has_text_layer": False,
+            "extracted_chars": 0,
+            "error": None,
+        }
+        try:
+            page = reader.pages[index]
+            text = page.extract_text() or ''
+        except Exception as e:
+            text = ''
+            page_info["error"] = str(e)
+        extracted_chars = len(text.strip())
+        page_info["extracted_chars"] = extracted_chars
+        page_info["has_text_layer"] = extracted_chars > 0
+        pages.append(page_info)
+    return pages
+
+
+def parse_page_range(range_text: str) -> list[int] | None:
+    """
+    Парсит пользовательский диапазон страниц в 0-based индексы.
+
+    Пример: "1-3, 7, 10-12" -> [0, 1, 2, 6, 9, 10, 11].
+    Пустая строка означает "все страницы" и возвращает None.
+    """
+    if range_text is None:
+        return None
+
+    text = range_text.strip()
+    if not text:
+        return None
+
+    pages = []
+    seen = set()
+
+    for raw_part in text.split(','):
+        part = raw_part.strip()
+        if not part:
+            raise ValueError(
+                f"Некорректный диапазон страниц: {range_text!r}."
+            )
+
+        match = re.fullmatch(r'(\d+)(?:\s*-\s*(\d+))?', part)
+        if not match:
+            raise ValueError(
+                "Некорректный диапазон страниц. Используйте формат "
+                "'1-3, 7, 10-12'."
+            )
+
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+
+        if start < 1 or end < 1:
+            raise ValueError("Номера страниц должны начинаться с 1.")
+        if start > end:
+            raise ValueError(
+                f"Некорректный диапазон страниц: {start}-{end}."
+            )
+
+        if end - start + 1 > 1000:
+            raise ValueError(
+                f"Диапазон '{start}-{end}' содержит {end - start + 1} страниц — "
+                "максимально допустимо 1 000."
+            )
+        for page_num in range(start, end + 1):
+            page_index = page_num - 1
+            if page_index not in seen:
+                pages.append(page_index)
+                seen.add(page_index)
+        if len(pages) > 1000:
+            raise ValueError(
+                "Суммарное количество выбранных страниц превышает 1 000. "
+                "Разбейте запрос на несколько меньших диапазонов."
+            )
+
+    return pages
+
+
+def convert_with_markitdown(file_path: str, page_range: str | None = None) -> str:
+    """
+    Конвертирует PDF/DOCX/XLSX/PPTX в Markdown через Microsoft MarkItDown.
+
+    Диапазон страниц на первом этапе поддержан только для PDF. Для PDF
+    создаётся временный файл с выбранными 1-based страницами пользователя,
+    после чего именно он передаётся в MarkItDown.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Файл не найден: {file_path}")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    supported_exts = {'.pdf', '.docx', '.xlsx', '.pptx'}
+    if ext not in supported_exts:
+        raise ValueError(
+            f"Неподдерживаемый формат для MarkItDown: {ext or 'без расширения'}."
+        )
+
+    has_page_range = bool(page_range and page_range.strip())
+    if has_page_range and ext != '.pdf':
+        raise ValueError(
+            "Диапазон страниц на первом этапе поддержан только для PDF. "
+            "Для DOCX/XLSX/PPTX конвертируйте файл целиком."
+        )
+
+    pages = parse_page_range(page_range) if has_page_range else None
+
+    source_path = file_path
+    tmp_pdf_path = None
+    selected_pdf_pages = None
+
+    try:
+        if ext == '.pdf' and pages is not None:
+            selected_pdf_pages = _get_selected_pdf_page_analysis(file_path, pages)
+            source_path = _create_pdf_page_subset(file_path, pages)
+            tmp_pdf_path = source_path
+
+        from markitdown import MarkItDown
+
+        result = MarkItDown().convert(source_path)
+        markdown = getattr(result, 'markdown', '')
+        if (
+            ext == '.pdf'
+            and selected_pdf_pages is not None
+            and _looks_like_image_only_result(markdown, selected_pdf_pages)
+        ):
+            raise ValueError(PDF_IMAGE_ONLY_MESSAGE)
+        if not markdown or not markdown.strip():
+            raise ValueError(
+                "MarkItDown вернул пустой Markdown. Проверьте, что файл "
+                "содержит извлекаемый текст."
+            )
+        return markdown.strip()
+    finally:
+        if tmp_pdf_path:
+            try:
+                os.unlink(tmp_pdf_path)
+            except OSError:
+                pass
+
+
+def _get_selected_pdf_page_analysis(file_path: str,
+                                    page_indexes: list[int]) -> list[dict]:
+    """Возвращает анализ выбранных 0-based страниц и проверяет границы PDF."""
+    all_pages = analyze_pdf_pages(file_path)
+    total_pages = len(all_pages)
+    selected = []
+
+    for page_index in page_indexes:
+        if page_index < 0 or page_index >= total_pages:
+            raise ValueError(
+                f"Страница {page_index + 1} вне диапазона PDF: "
+                f"в файле всего {total_pages} стр."
+            )
+        selected.append(all_pages[page_index])
+
+    return selected
+
+
+def _looks_like_image_only_result(markdown: str,
+                                  selected_pages: list[dict]) -> bool:
+    """Определяет, что выбранные страницы, вероятно, image-only."""
+    markdown_chars = len((markdown or '').strip())
+    has_text_pages = [
+        page for page in selected_pages
+        if page.get("has_text_layer") or page.get("extracted_chars", 0) > 0
+    ]
+    return not has_text_pages and markdown_chars < 50
+
+
+def _create_pdf_page_subset(file_path: str, page_indexes: list[int]) -> str:
+    """Создаёт временный PDF с выбранными 0-based страницами."""
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(file_path)
+    total_pages = len(reader.pages)
+
+    writer = PdfWriter()
+    for page_index in page_indexes:
+        if page_index >= total_pages:
+            raise ValueError(
+                f"Страница {page_index + 1} вне диапазона PDF: "
+                f"в файле всего {total_pages} стр."
+            )
+        writer.add_page(reader.pages[page_index])
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+    try:
+        writer.write(tmp)
+        return tmp.name
+    finally:
+        tmp.close()
 
 
 # =============================================================================
