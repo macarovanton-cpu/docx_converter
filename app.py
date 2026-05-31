@@ -1,6 +1,8 @@
+import io
 import os
 import re
 import tempfile
+import zipfile
 from datetime import datetime
 
 import streamlit as st
@@ -61,6 +63,36 @@ def _safe_md_filename(filename: str) -> str:
     stem = filename.rsplit('.', 1)[0]
     stem = re.sub(r'[^\w\-а-яА-ЯёЁ]+', '_', stem, flags=re.UNICODE).strip('_')
     return f"{stem or 'converted'}.md"
+
+
+def _unique_md_filename(filename: str, used_names: set[str]) -> str:
+    safe_name = _safe_md_filename(filename)
+    stem = safe_name[:-3]
+    candidate = safe_name
+    counter = 2
+    while candidate in used_names:
+        candidate = f"{stem}_{counter}.md"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _build_markdown_zip(results: list[dict]) -> tuple[bytes, int, int]:
+    buffer = io.BytesIO()
+    used_names = set()
+    included = 0
+    skipped = 0
+
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for result in results:
+            if result.get("error") or not result.get("markdown"):
+                skipped += 1
+                continue
+            archive_name = _unique_md_filename(result["filename"], used_names)
+            zf.writestr(archive_name, result["markdown"])
+            included += 1
+
+    return buffer.getvalue(), included, skipped
 
 
 def _save_uploaded_to_temp(uploaded_file, ext: str) -> str:
@@ -359,6 +391,21 @@ def render_files_to_markdown_mode():
         return
 
     st.markdown("#### Результаты")
+    zip_bytes, included_count, skipped_count = _build_markdown_zip(results)
+    if skipped_count:
+        st.warning(
+            f"В ZIP не включено файлов с ошибками: {skipped_count}."
+        )
+    if included_count:
+        st.download_button(
+            "Скачать все .md в ZIP",
+            data=zip_bytes,
+            file_name="markdown_results.zip",
+            mime="application/zip",
+            key="download_all_md_zip",
+            use_container_width=True,
+        )
+
     for idx, result in enumerate(results):
         with st.container(border=True):
             st.markdown(f"**{result['filename']}**")
