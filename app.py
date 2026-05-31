@@ -13,6 +13,7 @@ from file_converter import (
     analyze_pdf_pages,
     convert_file_to_md,
     convert_with_markitdown,
+    parse_page_range,
 )
 
 
@@ -431,6 +432,12 @@ def render_files_to_markdown_mode():
         if not normalized_common_range:
             st.warning("Введите диапазон страниц для PDF.")
         else:
+            try:
+                parse_page_range(normalized_common_range)
+            except ValueError as e:
+                normalized_common_range = None
+                st.error(f"Некорректный диапазон страниц: {e}")
+        if normalized_common_range:
             for idx, uploaded_file in enumerate(uploaded_files):
                 if _file_ext(uploaded_file.name) == "pdf":
                     st.session_state[range_keys[idx]] = normalized_common_range
@@ -474,19 +481,42 @@ def render_files_to_markdown_mode():
                         "Page range пока поддержан только для PDF. "
                         "Для DOCX/XLSX/PPTX конвертируется весь файл."
                     )
+                elif ext == "pdf" and normalized:
+                    try:
+                        parse_page_range(normalized)
+                    except ValueError as e:
+                        st.error(str(e))
 
     if st.button("Конвертировать в Markdown", type="primary"):
-        results = []
-        progress = st.progress(0)
+        invalid_ranges = []
         for idx, uploaded_file in enumerate(uploaded_files):
-            key = range_keys[idx]
-            page_range = _normalize_page_range(st.session_state.get(key))
-            with st.spinner(f"Конвертирую {uploaded_file.name}..."):
-                result = _convert_uploaded_file(uploaded_file, page_range)
-            results.append(result)
-            progress.progress((idx + 1) / len(uploaded_files))
-        progress.empty()
-        st.session_state.files_to_md_results = results
+            if _file_ext(uploaded_file.name) != "pdf":
+                continue
+            page_range = _normalize_page_range(st.session_state.get(range_keys[idx]))
+            if not page_range:
+                continue
+            try:
+                parse_page_range(page_range)
+            except ValueError as e:
+                invalid_ranges.append(f"{uploaded_file.name}: {e}")
+
+        if invalid_ranges:
+            st.error(
+                "Конвертация не запущена — исправьте диапазоны страниц:\n\n"
+                + "\n\n".join(invalid_ranges)
+            )
+        else:
+            results = []
+            progress = st.progress(0)
+            for idx, uploaded_file in enumerate(uploaded_files):
+                key = range_keys[idx]
+                page_range = _normalize_page_range(st.session_state.get(key))
+                with st.spinner(f"Конвертирую {uploaded_file.name}..."):
+                    result = _convert_uploaded_file(uploaded_file, page_range)
+                results.append(result)
+                progress.progress((idx + 1) / len(uploaded_files))
+            progress.empty()
+            st.session_state.files_to_md_results = results
 
     results = st.session_state.get("files_to_md_results", [])
     if not results:
