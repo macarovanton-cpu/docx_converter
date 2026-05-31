@@ -109,11 +109,21 @@ def parse_page_range(range_text: str) -> list[int] | None:
                 f"Некорректный диапазон страниц: {start}-{end}."
             )
 
+        if end - start + 1 > 1000:
+            raise ValueError(
+                f"Диапазон '{start}-{end}' содержит {end - start + 1} страниц — "
+                "максимально допустимо 1 000."
+            )
         for page_num in range(start, end + 1):
             page_index = page_num - 1
             if page_index not in seen:
                 pages.append(page_index)
                 seen.add(page_index)
+        if len(pages) > 1000:
+            raise ValueError(
+                "Суммарное количество выбранных страниц превышает 1 000. "
+                "Разбейте запрос на несколько меньших диапазонов."
+            )
 
     return pages
 
