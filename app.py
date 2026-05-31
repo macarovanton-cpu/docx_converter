@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import re
@@ -135,21 +136,37 @@ def _save_uploaded_to_temp(uploaded_file, ext: str) -> str:
         tmp.close()
 
 
+@st.cache_data(show_spinner=False)
+def _analyze_pdf_pages_cached(file_bytes: bytes, file_hash: str) -> list[dict]:
+    _ = file_hash
+    tmp_path = None
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    try:
+        tmp_path = tmp.name
+        try:
+            tmp.write(file_bytes)
+        finally:
+            tmp.close()
+        return analyze_pdf_pages(tmp_path)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def _display_pdf_diagnostics(uploaded_file, ext: str):
     if ext != "pdf":
         return
 
-    tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
     try:
-        pages = analyze_pdf_pages(tmp_path)
+        file_bytes = uploaded_file.getvalue()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        pages = _analyze_pdf_pages_cached(file_bytes, file_hash)
     except Exception as e:
         st.warning(f"Не удалось прочитать диагностику PDF: {e}")
         return
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
 
     image_only = [
         page["page_number"] for page in pages
@@ -322,17 +339,23 @@ def render_md_to_docx_mode():
                 try:
                     tmp_out = tempfile.NamedTemporaryFile(
                         delete=False, suffix=".docx")
-                    tmp_out.close()
+                    tmp_out_path = tmp_out.name
+                    try:
+                        tmp_out.close()
 
-                    convert_md_to_docx(md_text=md_text,
-                                       output_filename=tmp_out.name,
-                                       template_path=template_path,
-                                       images=source_images)
+                        convert_md_to_docx(md_text=md_text,
+                                           output_filename=tmp_out_path,
+                                           template_path=template_path,
+                                           images=source_images)
 
-                    with open(tmp_out.name, 'rb') as f:
-                        docx_bytes = f.read()
+                        with open(tmp_out_path, 'rb') as f:
+                            docx_bytes = f.read()
+                    finally:
+                        try:
+                            os.unlink(tmp_out_path)
+                        except OSError:
+                            pass
 
-                    os.unlink(tmp_out.name)
                     if use_drive and template_path != config["local_path"]:
                         try:
                             os.unlink(template_path)
