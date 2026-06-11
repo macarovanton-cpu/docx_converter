@@ -15,6 +15,10 @@ from file_converter import (
     convert_with_markitdown,
     parse_page_range,
 )
+from ocr_auto_mode import (
+    convert_pdf_with_optional_ocr,
+    pdf_pages_without_text_layer,
+)
 
 
 def download_template_from_drive(file_id: str) -> str:
@@ -169,10 +173,7 @@ def _display_pdf_diagnostics(uploaded_file, ext: str):
         st.warning(f"Не удалось прочитать диагностику PDF: {e}")
         return
 
-    image_only = [
-        page["page_number"] for page in pages
-        if not page.get("has_text_layer")
-    ]
+    image_only = pdf_pages_without_text_layer(pages)
     st.caption(f"PDF: {len(pages)} стр.")
     if image_only:
         st.warning(
@@ -182,17 +183,57 @@ def _display_pdf_diagnostics(uploaded_file, ext: str):
         )
 
 
-def _convert_uploaded_file(uploaded_file, page_range: str | None) -> dict:
+def _display_ocr_candidate_status(uploaded_file, ext: str, ocr_mode: str,
+                                  page_range: str | None):
+    if ext != "pdf" or ocr_mode != "auto":
+        return
+
+    try:
+        file_bytes = uploaded_file.getvalue()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        pages = _analyze_pdf_pages_cached(file_bytes, file_hash)
+    except Exception as e:
+        st.warning(f"OCR auto: не удалось прочитать диагностику PDF: {e}")
+        return
+
+    try:
+        image_only = pdf_pages_without_text_layer(pages, page_range)
+    except ValueError as e:
+        st.warning(f"OCR auto: исправьте диапазон страниц: {e}")
+        return
+
+    if image_only:
+        st.info(
+            "OCR auto: кандидат на OCR "
+            f"(страницы без текстового слоя: {', '.join(map(str, image_only))}). "
+            "OCR будет применён при конвертации."
+        )
+    else:
+        st.success("OCR auto: текстовый слой найден, OCR не нужен.")
+
+
+def _convert_uploaded_file(uploaded_file, page_range: str | None,
+                           ocr_mode: str = "off") -> dict:
     ext = _file_ext(uploaded_file.name)
     display_range = page_range or "all"
+    ocr_status = None
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
     try:
-        markdown = convert_with_markitdown(tmp_path, page_range=page_range)
+        if ocr_mode == "auto" and ext == "pdf":
+            pages = analyze_pdf_pages(tmp_path)
+            markdown, ocr_status = convert_pdf_with_optional_ocr(
+                tmp_path,
+                page_range=page_range,
+                pages=pages,
+            )
+        else:
+            markdown = convert_with_markitdown(tmp_path, page_range=page_range)
         return {
             "filename": uploaded_file.name,
             "download_name": _safe_md_filename(uploaded_file.name),
             "file_type": ext.upper() or "UNKNOWN",
             "page_range": display_range,
+            "ocr_status": ocr_status,
             "markdown": markdown,
             "error": None,
         }
@@ -202,6 +243,7 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None) -> dict:
             "download_name": _safe_md_filename(uploaded_file.name),
             "file_type": ext.upper() or "UNKNOWN",
             "page_range": display_range,
+            "ocr_status": ocr_status,
             "markdown": "",
             "error": str(e),
         }
@@ -406,6 +448,22 @@ def render_files_to_markdown_mode():
         st.caption("Загрузите один или несколько файлов для конвертации.")
         return
 
+    ocr_mode = st.radio(
+        "OCR mode",
+        options=["off", "auto"],
+        index=0,
+        horizontal=True,
+        key="files_to_md_ocr_mode",
+        help=(
+            "off: текущая конвертация через MarkItDown без OCR. "
+            "auto: применяет OCR только к PDF без текстового слоя."
+        ),
+    )
+    if ocr_mode == "off":
+        st.caption("OCR выключен: используется текущий MarkItDown flow.")
+    else:
+        st.caption("OCR auto включен: OCR применяется только к PDF-кандидатам.")
+
     range_keys = {
         idx: f"page_range_{idx}_{_safe_md_filename(uploaded_file.name)}"
         for idx, uploaded_file in enumerate(uploaded_files)
@@ -460,16 +518,23 @@ def render_files_to_markdown_mode():
     st.markdown("#### Настройки файлов")
     for idx, uploaded_file in enumerate(uploaded_files):
         ext = _file_ext(uploaded_file.name)
+        key = range_keys[idx]
+        if key not in st.session_state:
+            st.session_state[key] = "all"
+        selected_page_range = _normalize_page_range(st.session_state.get(key))
         with st.container(border=True):
             meta_col, range_col = st.columns([2, 1], vertical_alignment="top")
             with meta_col:
                 st.markdown(f"**{uploaded_file.name}**")
                 st.caption(f"Тип: .{ext or 'unknown'}")
                 _display_pdf_diagnostics(uploaded_file, ext)
+                _display_ocr_candidate_status(
+                    uploaded_file,
+                    ext,
+                    ocr_mode,
+                    selected_page_range,
+                )
             with range_col:
-                key = range_keys[idx]
-                if key not in st.session_state:
-                    st.session_state[key] = "all"
                 page_range = st.text_input(
                     "Диапазон страниц",
                     key=key,
@@ -512,7 +577,11 @@ def render_files_to_markdown_mode():
                 key = range_keys[idx]
                 page_range = _normalize_page_range(st.session_state.get(key))
                 with st.spinner(f"Конвертирую {uploaded_file.name}..."):
-                    result = _convert_uploaded_file(uploaded_file, page_range)
+                    result = _convert_uploaded_file(
+                        uploaded_file,
+                        page_range,
+                        ocr_mode=ocr_mode,
+                    )
                 results.append(result)
                 progress.progress((idx + 1) / len(uploaded_files))
             progress.empty()
@@ -557,6 +626,12 @@ def render_files_to_markdown_mode():
     for idx, result in enumerate(results):
         with st.container(border=True):
             st.markdown(f"**{result['filename']}**")
+            ocr_status = result.get("ocr_status")
+            if ocr_status:
+                if ocr_status.get("status") == "applied":
+                    st.info(ocr_status["message"])
+                elif ocr_status.get("status") == "not_needed":
+                    st.success(ocr_status["message"])
             if result["error"]:
                 st.error(result["error"])
                 continue
