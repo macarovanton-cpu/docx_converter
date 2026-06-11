@@ -43,6 +43,18 @@ class MarkdownCleanupTests(unittest.TestCase):
             "текст\nНавес: закрытого типа",
         )
 
+    def test_converts_stuck_e_bullet_after_number(self):
+        self.assertEqual(
+            cleanup_ocr_markdown("+5.000e Помещение управления"),
+            "+5.000\n- Помещение управления",
+        )
+
+    def test_converts_stuck_e_bullet_after_number_and_letter(self):
+        self.assertEqual(
+            cleanup_ocr_markdown("1Ce Получение заключения"),
+            "1C\n- Получение заключения",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

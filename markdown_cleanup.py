@@ -29,6 +29,8 @@ def cleanup_ocr_markdown(text: str) -> str:
 
     text = re.sub(r";(?:e|•|·)\s+", "\n- ", text)
     text = re.sub(r"\.e\s+(?=[A-ZА-ЯЁа-яё])", "\n- ", text)
+    text = re.sub(r"(?<=[0-9.,;:!?+\-–—)\]\}])e\s+(?=[A-ZА-ЯЁ])", "\n- ", text)
+    text = re.sub(r"(?<=[0-9][A-ZА-ЯЁ])e\s+(?=[A-ZА-ЯЁ])", "\n- ", text)
 
     text = re.sub(
         r"([^\n])\s+(?=(?:1 Основание|2 Заказчик|3 Стадия)\b)",

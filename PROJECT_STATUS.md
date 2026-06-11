@@ -37,8 +37,8 @@ The `feature/markitdown-import` PR has been merged into `main`.
 
 ## Current Phase
 
-Backend-only deterministic cleanup PoC for OCR Markdown refined after checking
-real OCR Markdown. The cleanup is not connected to the UI or existing
+Backend-only deterministic cleanup PoC for OCR Markdown refined for real OCR
+glued bullet markers. The cleanup is not connected to the UI or existing
 conversion flow.
 
 ## Branch Context
@@ -47,8 +47,8 @@ Current branch: `feature/ocr-markdown-cleanup-poc`
 
 ## Next Recommended Task
 
-- rerun `cleanup_ocr_markdown()` on the real `ТТ.md` OCR Markdown and evaluate
-  readability;
+- rerun `cleanup_ocr_markdown()` on the real `ТТ.md` OCR Markdown and decide
+  whether readability is good enough for a separate opt-in UI mode;
 - keep cleanup disconnected from conversion until a separate explicit task;
 - keep LLM cleanup as a separate future task.
 
@@ -153,6 +153,18 @@ If using `ocr_converter.py`:
 ## Recent Work Log
 
 2026-06-11:
+
+- Refined the OCR Markdown cleanup PoC for real OCR glued bullet markers such
+  as `+5.000e ...` and `1Ce ...`.
+- Added focused unit tests for those real glue cases in
+  `tests/test_markdown_cleanup.py`.
+- UI was not changed; cleanup is still not connected to conversion.
+- Checks run: `python -m unittest tests.test_markdown_cleanup` and
+  `python -m py_compile markdown_cleanup.py tests/test_markdown_cleanup.py`.
+- Recommended next step: rerun cleanup on the real `ТТ.md` and decide whether
+  quality is enough for a separate opt-in UI mode.
+
+2026-06-11 previous cleanup refinement:
 
 - Refined the backend-only deterministic OCR Markdown cleanup PoC after
   checking a real OCR Markdown file.
