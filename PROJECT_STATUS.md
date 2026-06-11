@@ -27,6 +27,8 @@ Current import capability:
 - OCR backend integration for PDF candidates without a text layer;
 - OCR auto respects selected PDF page ranges when deciding whether OCR is
   needed;
+- backend-only deterministic OCR Markdown cleanup PoC, not connected to the UI
+  or conversion flow;
 - oversized page range protection;
 - UI validation for page ranges;
 - temporary file cleanup.
@@ -35,23 +37,25 @@ The `feature/markitdown-import` PR has been merged into `main`.
 
 ## Current Phase
 
-OCR UI auto mode backend connection added.
+Backend-only deterministic cleanup PoC for OCR Markdown refined for real OCR
+glued bullet markers. The cleanup is not connected to the UI or existing
+conversion flow.
 
 ## Branch Context
 
-Current branch: `feature/ocr-ui-auto`
+Current branch: `feature/ocr-markdown-cleanup-poc`
 
 ## Next Recommended Task
 
-- run a manual Streamlit smoke check with real PDFs in `off` and `auto`;
-- verify a text-layer PDF skips OCR and an image-only PDF uses OCR;
-- verify `auto` skips OCR when `page_range` selects only text-layer pages from
-  a PDF that also contains image-only pages outside the selected range;
-- keep OCR cleanup / LLM cleanup as a separate future task.
+- rerun `cleanup_ocr_markdown()` on the real `ТТ.md` OCR Markdown and decide
+  whether readability is good enough for a separate opt-in UI mode;
+- keep cleanup disconnected from conversion until a separate explicit task;
+- keep LLM cleanup as a separate future task.
 
 ## Do Not Do Now
 
 - Do not add LLM cleanup.
+- Do not connect cleanup to the UI or conversion flow without a separate task.
 - Do not do a large refactor.
 - Do not change `convert.py`.
 - Do not add OCR to the main `requirements.txt` without a packaging decision.
@@ -150,6 +154,24 @@ If using `ocr_converter.py`:
 
 2026-06-11:
 
+- Added backend-only deterministic OCR Markdown cleanup PoC in
+  `markdown_cleanup.py`.
+- Added `cleanup_ocr_markdown()` for conservative normalization and cleanup:
+  line ending normalization, form feed removal, intra-line space cleanup, blank
+  line compression, common OCR bullet marker conversion, a small OCR artifact
+  dictionary, and line breaks before obvious sections/subheadings.
+- Refined cleanup after real OCR Markdown checks, including glued bullet
+  markers such as `+5.000e ...` and `1Ce ...`.
+- Added focused unit tests in `tests/test_markdown_cleanup.py`.
+- UI was not changed; cleanup is not connected to the conversion flow.
+- Checks run: `python -m unittest tests.test_markdown_cleanup` and
+  `python -m py_compile app.py file_converter.py convert.py ocr_converter.py
+  ocr_auto_mode.py markdown_cleanup.py tests/test_markdown_cleanup.py`.
+- Recommended next step: decide whether to connect cleanup as a separate
+  opt-in `raw` / `cleaned` mode.
+
+2026-06-11 previous step:
+
 - Connected OCR `auto` mode to `ocr_converter.ocr_pdf_to_searchable_pdf()`
   for PDF files whose diagnostics show pages without a text layer.
 - `off` still uses the existing MarkItDown-only conversion path.
@@ -173,7 +195,7 @@ If using `ocr_converter.py`:
 - Recommended next step: manual Streamlit smoke check with real text-layer and
   image-only PDFs before committing.
 
-2026-06-11 previous step:
+2026-06-11 earlier step:
 
 - Added OCR mode UI in `Файлы -> Markdown` with `off` / `auto`; default is
   `off`.
