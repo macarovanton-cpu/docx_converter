@@ -23,7 +23,10 @@ Current import capability:
 - `combined.md`;
 - cached PDF diagnostics;
 - OCR mode UI switch (`off` / `auto`) for the files-to-Markdown mode;
-- OCR auto candidate display based on existing PDF diagnostics only;
+- OCR auto candidate display based on existing PDF diagnostics;
+- OCR backend integration for PDF candidates without a text layer;
+- OCR auto respects selected PDF page ranges when deciding whether OCR is
+  needed;
 - oversized page range protection;
 - UI validation for page ranges;
 - temporary file cleanup.
@@ -32,7 +35,7 @@ The `feature/markitdown-import` PR has been merged into `main`.
 
 ## Current Phase
 
-OCR UI auto mode first UI-only step added.
+OCR UI auto mode backend connection added.
 
 ## Branch Context
 
@@ -40,11 +43,11 @@ Current branch: `feature/ocr-ui-auto`
 
 ## Next Recommended Task
 
-Next recommended task:
-
-- wire `auto` mode to the OCR backend in a separate follow-up;
-- keep OCR opt-in and continue preserving the MarkItDown-only `off` path;
-- add focused checks around OCR candidate behavior before enabling OCR execution.
+- run a manual Streamlit smoke check with real PDFs in `off` and `auto`;
+- verify a text-layer PDF skips OCR and an image-only PDF uses OCR;
+- verify `auto` skips OCR when `page_range` selects only text-layer pages from
+  a PDF that also contains image-only pages outside the selected range;
+- keep OCR cleanup / LLM cleanup as a separate future task.
 
 ## Do Not Do Now
 
@@ -147,6 +150,31 @@ If using `ocr_converter.py`:
 
 2026-06-11:
 
+- Connected OCR `auto` mode to `ocr_converter.ocr_pdf_to_searchable_pdf()`
+  for PDF files whose diagnostics show pages without a text layer.
+- `off` still uses the existing MarkItDown-only conversion path.
+- Text-layer PDFs in `auto` skip OCR and continue through the existing
+  MarkItDown flow.
+- OCR candidate PDFs are written to a temporary searchable PDF, converted
+  through MarkItDown, and the temporary OCR PDF is removed in `finally`.
+- OCR `auto` now checks only the selected PDF pages when `page_range` is set,
+  so image-only pages outside the selected range do not trigger OCR.
+- The per-file OCR candidate UI status uses the selected `page_range` as well.
+- OCR errors are returned as the current per-file result error, so the batch
+  can continue processing other files.
+- Added focused unit tests for OCR candidate detection, OCR skip/apply
+  behavior, page-range-aware OCR decisions, temp OCR PDF cleanup, and OCR
+  backend error wrapping.
+- Files changed: `app.py`, `ocr_auto_mode.py`, `tests/test_ocr_auto_mode.py`,
+  `PROJECT_STATUS.md`.
+- Checks run: `python -m unittest tests.test_ocr_auto_mode` and
+  `python -m py_compile app.py file_converter.py ocr_converter.py
+  ocr_auto_mode.py tests/test_ocr_auto_mode.py`.
+- Recommended next step: manual Streamlit smoke check with real text-layer and
+  image-only PDFs before committing.
+
+2026-06-11 previous step:
+
 - Added OCR mode UI in `Файлы -> Markdown` with `off` / `auto`; default is
   `off`.
 - `off` keeps the existing MarkItDown conversion behavior unchanged.
@@ -176,15 +204,18 @@ If using `ocr_converter.py`:
 
 ## Next Prompt Target For Codex
 
-Start `feature/ocr-ui-auto`:
+Manual-check `feature/ocr-ui-auto`:
 
-- add OCR mode to the Streamlit UI: `off` / `auto`;
-- in `auto`, apply OCR only for PDF files without a text layer / image-only;
-- keep the change minimal and scoped;
+- run the Streamlit app locally;
+- verify `OCR mode = off` keeps the existing MarkItDown flow;
+- verify `OCR mode = auto` skips OCR for text-layer PDFs;
+- verify `OCR mode = auto` with `page_range` skips OCR when selected pages have
+  text, even if another PDF page is image-only;
+- verify `OCR mode = auto` applies OCR for image-only PDFs and still returns
+  other batch files if one file errors;
 - do not add LLM cleanup;
+- do not add deterministic cleanup;
 - do not do a large refactor;
-- do not change `convert.py` unless clearly necessary;
-- do not add OCR to the main `requirements.txt` without a packaging decision;
-- do not commit `test_files`;
+- do not change `convert.py`;
 - preserve the existing Markdown to DOCX workflow;
 - preserve the existing MarkItDown import workflow.
