@@ -154,45 +154,21 @@ If using `ocr_converter.py`:
 
 2026-06-11:
 
-- Refined the OCR Markdown cleanup PoC for real OCR glued bullet markers such
-  as `+5.000e ...` and `1Ce ...`.
-- Added focused unit tests for those real glue cases in
-  `tests/test_markdown_cleanup.py`.
-- UI was not changed; cleanup is still not connected to conversion.
-- Checks run: `python -m unittest tests.test_markdown_cleanup` and
-  `python -m py_compile markdown_cleanup.py tests/test_markdown_cleanup.py`.
-- Recommended next step: rerun cleanup on the real `ТТ.md` and decide whether
-  quality is enough for a separate opt-in UI mode.
-
-2026-06-11 previous cleanup refinement:
-
-- Refined the backend-only deterministic OCR Markdown cleanup PoC after
-  checking a real OCR Markdown file.
-- Added conservative handling for inline OCR bullet markers and glued technical
-  subheadings in `markdown_cleanup.py`.
-- Added focused tests for inline `;e` bullets and glued `Навес:` headings in
-  `tests/test_markdown_cleanup.py`.
-- UI was not changed; cleanup is still not connected to conversion.
-- Recommended next step: rerun cleanup on the real `ТТ.md` and evaluate
-  readability.
-
-2026-06-11 previous cleanup step:
-
-- Added backend-only PoC deterministic cleanup for OCR Markdown in
+- Added backend-only deterministic OCR Markdown cleanup PoC in
   `markdown_cleanup.py`.
-- `cleanup_ocr_markdown()` performs conservative normalization and cleanup:
+- Added `cleanup_ocr_markdown()` for conservative normalization and cleanup:
   line ending normalization, form feed removal, intra-line space cleanup, blank
   line compression, common OCR bullet marker conversion, a small OCR artifact
-  dictionary, and line breaks before obvious large numbered sections.
+  dictionary, and line breaks before obvious sections/subheadings.
+- Refined cleanup after real OCR Markdown checks, including glued bullet
+  markers such as `+5.000e ...` and `1Ce ...`.
 - Added focused unit tests in `tests/test_markdown_cleanup.py`.
-- UI was not changed.
-- Cleanup is not connected to conversion yet.
-- Files changed: `markdown_cleanup.py`, `tests/test_markdown_cleanup.py`,
-  `PROJECT_STATUS.md`.
+- UI was not changed; cleanup is not connected to the conversion flow.
 - Checks run: `python -m unittest tests.test_markdown_cleanup` and
-  `python -m py_compile markdown_cleanup.py tests/test_markdown_cleanup.py`.
-- Recommended next step: manually run cleanup on a real OCR-generated `.md` and
-  evaluate quality.
+  `python -m py_compile app.py file_converter.py convert.py ocr_converter.py
+  ocr_auto_mode.py markdown_cleanup.py tests/test_markdown_cleanup.py`.
+- Recommended next step: decide whether to connect cleanup as a separate
+  opt-in `raw` / `cleaned` mode.
 
 2026-06-11 previous step:
 
