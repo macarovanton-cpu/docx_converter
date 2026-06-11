@@ -1,6 +1,6 @@
 # docx_converter Project Status
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 ## Current State
 
@@ -27,8 +27,8 @@ Current import capability:
 - OCR backend integration for PDF candidates without a text layer;
 - OCR auto respects selected PDF page ranges when deciding whether OCR is
   needed;
-- backend-only deterministic OCR Markdown cleanup PoC, not connected to the UI
-  or conversion flow;
+- backend-only deterministic OCR Markdown cleanup PoC, de-overfit to general
+  OCR cleanup rules only and not connected to the UI or conversion flow;
 - oversized page range protection;
 - UI validation for page ranges;
 - temporary file cleanup.
@@ -37,18 +37,17 @@ The `feature/markitdown-import` PR has been merged into `main`.
 
 ## Current Phase
 
-Backend-only deterministic cleanup PoC for OCR Markdown refined for real OCR
-glued bullet markers. The cleanup is not connected to the UI or existing
-conversion flow.
+Backend-only deterministic cleanup de-overfit for OCR Markdown. The cleanup is
+not connected to the UI or existing conversion flow.
 
 ## Branch Context
 
-Current branch: `feature/ocr-markdown-cleanup-poc`
+Current branch: `feature/ocr-cleanup-deoverfit`
 
 ## Next Recommended Task
 
-- rerun `cleanup_ocr_markdown()` on the real `ТТ.md` OCR Markdown and decide
-  whether readability is good enough for a separate opt-in UI mode;
+- check `cleanup_ocr_markdown()` on 2-3 real OCR `.md` files without committing
+  `test_files`;
 - keep cleanup disconnected from conversion until a separate explicit task;
 - keep LLM cleanup as a separate future task.
 
@@ -151,6 +150,25 @@ If using `ocr_converter.py`:
 5. start with minimal plan for OCR UI auto mode
 
 ## Recent Work Log
+
+2026-06-12:
+
+- De-overfit backend-only deterministic OCR Markdown cleanup in
+  `markdown_cleanup.py`.
+- Kept only general OCR cleanup rules: line ending normalization, form feed
+  removal, intra-line whitespace normalization, blank line compression, OCR
+  bullet marker conversion, guarded glued `e` bullet conversion, `OOO` to
+  `ООО`, `[Р68` / `[P68` / `[Р67` / `[P67` to `IP68` / `IP67`, and obvious
+  `No` number markers to `№`.
+- Removed TT-specific cleanup behavior from the implementation and tests:
+  technical heading line breaks, `1 Основание` / `2 Заказчик` / `3 Стадия`
+  splitting, and `He «слепла»` replacement.
+- Updated `tests/test_markdown_cleanup.py` to use neutral examples.
+- UI and conversion flow were not changed; cleanup remains backend-only.
+- Checks run: `python -m unittest tests.test_markdown_cleanup` and
+  `python -m py_compile markdown_cleanup.py tests/test_markdown_cleanup.py`.
+- Recommended next step: check cleanup on 2-3 real OCR `.md` files without
+  committing `test_files`.
 
 2026-06-11:
 
