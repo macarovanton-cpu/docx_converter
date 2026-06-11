@@ -1,6 +1,6 @@
 # docx_converter Project Status
 
-Last updated: 2026-06-02
+Last updated: 2026-06-11
 
 ## Current State
 
@@ -22,6 +22,8 @@ Current import capability:
 - ZIP download;
 - `combined.md`;
 - cached PDF diagnostics;
+- OCR mode UI switch (`off` / `auto`) for the files-to-Markdown mode;
+- OCR auto candidate display based on existing PDF diagnostics only;
 - oversized page range protection;
 - UI validation for page ranges;
 - temporary file cleanup.
@@ -30,22 +32,19 @@ The `feature/markitdown-import` PR has been merged into `main`.
 
 ## Current Phase
 
-Preparing OCR UI auto mode.
+OCR UI auto mode first UI-only step added.
 
 ## Branch Context
 
-Current/last branch: `chore/project-status-docs`
-
-Next recommended branch: `feature/ocr-ui-auto`
+Current branch: `feature/ocr-ui-auto`
 
 ## Next Recommended Task
 
-Add OCR mode to the Streamlit UI:
+Next recommended task:
 
-- supported modes: `off` / `auto`;
-- `off`: keep the current MarkItDown-only behavior;
-- `auto`: apply OCR only for PDF files without a text layer / image-only PDFs;
-- start with a minimal plan for OCR UI auto mode before touching code.
+- wire `auto` mode to the OCR backend in a separate follow-up;
+- keep OCR opt-in and continue preserving the MarkItDown-only `off` path;
+- add focused checks around OCR candidate behavior before enabling OCR execution.
 
 ## Do Not Do Now
 
@@ -145,6 +144,21 @@ If using `ocr_converter.py`:
 5. start with minimal plan for OCR UI auto mode
 
 ## Recent Work Log
+
+2026-06-11:
+
+- Added OCR mode UI in `Файлы -> Markdown` with `off` / `auto`; default is
+  `off`.
+- `off` keeps the existing MarkItDown conversion behavior unchanged.
+- `auto` does not call `ocr_pdf_to_searchable_pdf()` yet.
+- `auto` uses the existing cached PDF diagnostics to show whether PDF files
+  are OCR candidates because they contain pages without a text layer, or
+  whether OCR is not needed because a text layer is present.
+- Files changed: `app.py`, `PROJECT_STATUS.md`.
+- Checks to run: `python -m py_compile app.py file_converter.py` and a manual
+  Streamlit smoke check of `Файлы -> Markdown` with OCR `off` and `auto`.
+- Recommended next step: in a separate task, connect OCR `auto` to the backend
+  helper for OCR candidates only.
 
 2026-06-02:
 

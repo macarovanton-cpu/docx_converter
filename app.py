@@ -182,6 +182,32 @@ def _display_pdf_diagnostics(uploaded_file, ext: str):
         )
 
 
+def _display_ocr_candidate_status(uploaded_file, ext: str, ocr_mode: str):
+    if ext != "pdf" or ocr_mode != "auto":
+        return
+
+    try:
+        file_bytes = uploaded_file.getvalue()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        pages = _analyze_pdf_pages_cached(file_bytes, file_hash)
+    except Exception as e:
+        st.warning(f"OCR auto: не удалось прочитать диагностику PDF: {e}")
+        return
+
+    image_only = [
+        page["page_number"] for page in pages
+        if not page.get("has_text_layer")
+    ]
+    if image_only:
+        st.info(
+            "OCR auto: кандидат на OCR "
+            f"(страницы без текстового слоя: {', '.join(map(str, image_only))}). "
+            "OCR пока не запускается."
+        )
+    else:
+        st.success("OCR auto: текстовый слой найден, OCR не нужен.")
+
+
 def _convert_uploaded_file(uploaded_file, page_range: str | None) -> dict:
     ext = _file_ext(uploaded_file.name)
     display_range = page_range or "all"
@@ -406,6 +432,22 @@ def render_files_to_markdown_mode():
         st.caption("Загрузите один или несколько файлов для конвертации.")
         return
 
+    ocr_mode = st.radio(
+        "OCR mode",
+        options=["off", "auto"],
+        index=0,
+        horizontal=True,
+        key="files_to_md_ocr_mode",
+        help=(
+            "off: текущая конвертация через MarkItDown без OCR. "
+            "auto: сейчас только показывает PDF-кандидаты на OCR."
+        ),
+    )
+    if ocr_mode == "off":
+        st.caption("OCR выключен: используется текущий MarkItDown flow.")
+    else:
+        st.caption("OCR auto: на этом шаге OCR не запускается, показывается только диагностика.")
+
     range_keys = {
         idx: f"page_range_{idx}_{_safe_md_filename(uploaded_file.name)}"
         for idx, uploaded_file in enumerate(uploaded_files)
@@ -466,6 +508,7 @@ def render_files_to_markdown_mode():
                 st.markdown(f"**{uploaded_file.name}**")
                 st.caption(f"Тип: .{ext or 'unknown'}")
                 _display_pdf_diagnostics(uploaded_file, ext)
+                _display_ocr_candidate_status(uploaded_file, ext, ocr_mode)
             with range_col:
                 key = range_keys[idx]
                 if key not in st.session_state:
