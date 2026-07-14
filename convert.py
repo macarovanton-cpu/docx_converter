@@ -651,6 +651,9 @@ def set_paragraph_numbering(paragraph, num_id, ilvl=0):
 
 def convert_md_to_docx(md_text, output_filename, template_path=None, images=None):
 
+    # ПРАВКА #28: нормализация переводов строк — CRLF/CR ломали split('\n\n') и regex #26
+    md_text = md_text.replace('\r\n', '\n').replace('\r', '\n')
+
     # --- Открываем шаблон или создаём чистый документ ---
     if template_path and os.path.exists(template_path):
         doc = Document(template_path)
