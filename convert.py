@@ -252,6 +252,16 @@ def is_photo_placeholder(text):
 # ПРАВКА #23: блок-картинка ![alt](src)
 _IMG_BLOCK_RE = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
 
+# ПРАВКА #33: сплит строки таблицы по неэкранированному |, unescape \| в ячейках
+def split_table_row(line):
+    parts = re.split(r'(?<!\\)\|', line.strip())
+    if parts and parts[0] == '':
+        parts = parts[1:]
+    if parts and parts[-1] == '':
+        parts = parts[:-1]
+    return [p.strip().replace('\\|', '|') for p in parts]
+
+
 def is_requisites_block(text):
     return bool(re.match(r'^\*\*(Кому|От кого|Кому:|От кого:)', text))
 
@@ -958,7 +968,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                      if l.strip() and not re.match(r'^\|[-|: ]+\|$', l.strip())]
             if not lines: continue
 
-            headers  = [c.strip() for c in lines[0].strip('|').split('|')]
+            headers  = split_table_row(lines[0])   # ПРАВКА #33
             n_cols   = len(headers)
             table    = doc.add_table(rows=1, cols=n_cols)
             # ПРАВКА #16: autofit для распределения ширин по содержимому
@@ -997,7 +1007,13 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                     for r in p.runs: r.bold = True
 
             for row_idx, line in enumerate(lines[1:]):
-                cols      = [c.strip() for c in line.strip('|').split('|')]
+                cols = split_table_row(line)   # ПРАВКА #33
+                # ПРАВКА #33: недостающие ячейки добиваем пустыми (стили ниже
+                # применяются ко всем), лишние — приклеиваем к последней
+                if len(cols) < n_cols:
+                    cols += [''] * (n_cols - len(cols))
+                elif len(cols) > n_cols:
+                    cols = cols[:n_cols - 1] + [' '.join(cols[n_cols - 1:])]
                 row_cells = table.add_row().cells
                 is_even   = (row_idx % 2 == 1)
 
