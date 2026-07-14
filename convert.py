@@ -645,6 +645,31 @@ def ensure_list_numbering(doc):
     return BULLET_NUM_ID, NUMBERED_NUM_ID
 
 
+def new_numbered_num_id(doc):
+    """
+    ПРАВКА #31: свежий w:num со startOverride=1 для каждого нового списка.
+    Без этого все нумерованные списки документа делили один счётчик и
+    второй список продолжался с 4 вместо 1.
+    """
+    numbering_elem = doc.part.numbering_part.element
+    existing = [int(n.get(qn('w:numId')))
+                for n in numbering_elem.findall(qn('w:num'))]
+    num_id = max(existing) + 1
+    num = OxmlElement('w:num')
+    num.set(qn('w:numId'), str(num_id))
+    abstract_ref = OxmlElement('w:abstractNumId')
+    abstract_ref.set(qn('w:val'), '101')   # NUMBERED_ABSTRACT_ID из ensure_list_numbering
+    num.append(abstract_ref)
+    override = OxmlElement('w:lvlOverride')
+    override.set(qn('w:ilvl'), '0')
+    start_override = OxmlElement('w:startOverride')
+    start_override.set(qn('w:val'), '1')
+    override.append(start_override)
+    num.append(override)
+    numbering_elem.append(num)
+    return num_id
+
+
 def set_paragraph_numbering(paragraph, num_id, ilvl=0):
     """ПРАВКА #13: привязывает абзац к numbering definition через OXML."""
     pPr = paragraph._p.get_or_add_pPr()
@@ -736,6 +761,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
     pending_intro_after_h1 = False
     last_list_paragraph   = None
     last_regular_paragraph = None  # ПРАВКА #10: для keep_with_next перед подписью
+    current_numbered_num_id = None  # ПРАВКА #31: numId текущего нумерованного списка
 
     for block in blocks:
         block = block.strip()
@@ -744,7 +770,13 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
         is_list_item = (block.startswith('- ')
                         or block.startswith('* ')
-                        or bool(re.match(r'^\d+\.', block)))
+                        # ПРАВКА #31: пробел после точки обязателен, маркер — max 2
+                        # цифры, иначе «2025. Год…» съедался как пункт списка
+                        or bool(re.match(r'^\d{1,2}\. ', block)))
+        if not is_list_item:
+            # ПРАВКА #31: любой не-списочный блок завершает текущий
+            # нумерованный список — следующий начнётся с 1
+            current_numbered_num_id = None
         if not is_list_item and last_list_paragraph:
             last_list_paragraph.paragraph_format.space_after = Pt(10)
             last_list_paragraph = None
@@ -865,14 +897,17 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             for line in block.split('\n'):
                 line = line.strip()
                 if not line: continue
-                is_num = bool(re.match(r'^\d+\.', line))
+                is_num = bool(re.match(r'^\d{1,2}\. ', line))  # ПРАВКА #31: пробел обязателен, max 2 цифры
                 # ПРАВКА #13: привязываем numbering напрямую через OXML
+                # ПРАВКА #31: каждый новый нумерованный список — свой numId с рестартом
+                if is_num and current_numbered_num_id is None:
+                    current_numbered_num_id = new_numbered_num_id(doc)
                 p = doc.add_paragraph()
-                set_paragraph_numbering(p, numbered_num_id if is_num else bullet_num_id)
+                set_paragraph_numbering(p, current_numbered_num_id if is_num else bullet_num_id)
                 p.paragraph_format.left_indent       = Cm(1.5)
                 p.paragraph_format.first_line_indent = Cm(-0.75)
                 p.paragraph_format.space_after       = Pt(4)
-                parse_inline_markdown(p, re.sub(r'^(\- |\* |\d+\. )', '', line))
+                parse_inline_markdown(p, re.sub(r'^(\- |\* |\d{1,2}\. )', '', line))  # ПРАВКА #31: синхронно с is_num
                 last_list_paragraph = p
                 last_regular_paragraph = p
             after_heading = False
