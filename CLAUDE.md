@@ -34,6 +34,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Local-run gotchas (learned 2026-07-15):
+- MD→DOCX needs a template: `.streamlit/secrets.toml` here is **empty (0 bytes)**, so Drive is unavailable and the app falls back to `C:\Users\tonik\Desktop\docx_converter\template.docx` — that file must exist, otherwise «Шаблон не найден».
+- `convert.py` prints emoji (`✅`); on a cp1251 Windows console this raises `UnicodeEncodeError` and the UI shows it as a conversion error. Run with `python -X utf8 -m streamlit run app.py` (or set `PYTHONIOENCODING=utf-8`).
+
 The dev container auto-starts the app on port 8501 after attach (`postAttachCommand` in `.devcontainer/devcontainer.json`).
 
 Run `convert.py` standalone for local batch testing:
@@ -47,7 +51,7 @@ Push to `main` → Streamlit Cloud picks it up automatically. No CI step require
 
 ## Architecture
 
-Six Python modules:
+Seven Python modules:
 
 - **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types.
 - **`convert.py`** — Core Markdown → DOCX engine (~1050 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
@@ -55,8 +59,9 @@ Six Python modules:
 - **`markdown_cleanup.py`** — Deterministic OCR Markdown cleanup (`cleanup_ocr_markdown`). Covered by tests but **not connected to the UI or conversion flow** — backend-only.
 - **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
 - **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Also provides `check_ocr_dependencies`.
+- **`pdf_core.py`** — Provider-agnostic PDF → Markdown core. Public entry points: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider) -> str` and `pdf_to_markdown_with_status(...) -> (str, status_dict | None)` (the latter is what `app.py` uses — the UI shows `ocr_status`). Owns bytes→tempfile plumbing; no Streamlit, no caches. Defines the `OcrProvider` protocol (`ocr_pdf_to_markdown(pdf_bytes, page_range) -> str`) with one implementation, `OcrmypdfProvider`; `provider=None` routes through `ocr_auto_mode.convert_pdf_with_optional_ocr` unchanged. A second (cloud vision) provider is a planned separate PR.
 
-OCR pipeline (mode `auto` in `Файлы -> Markdown`): `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
+OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
 
 ## Brand constants (convert.py)
 

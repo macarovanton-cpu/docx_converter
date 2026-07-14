@@ -15,10 +15,8 @@ from file_converter import (
     convert_with_markitdown,
     parse_page_range,
 )
-from ocr_auto_mode import (
-    convert_pdf_with_optional_ocr,
-    pdf_pages_without_text_layer,
-)
+from ocr_auto_mode import pdf_pages_without_text_layer
+from pdf_core import pdf_to_markdown_with_status
 
 
 def download_template_from_drive(file_id: str) -> str:
@@ -219,13 +217,9 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
     ocr_status = None
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
     try:
-        if ocr_mode == "auto" and ext == "pdf":
-            pages = analyze_pdf_pages(tmp_path)
-            markdown, ocr_status = convert_pdf_with_optional_ocr(
-                tmp_path,
-                page_range=page_range,
-                pages=pages,
-            )
+        if ext == "pdf":
+            markdown, ocr_status = pdf_to_markdown_with_status(
+                uploaded_file.getvalue(), page_range=page_range, mode=ocr_mode)
         else:
             markdown = convert_with_markitdown(tmp_path, page_range=page_range)
         return {
