@@ -706,8 +706,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             _images_dict[fname] = img_bytes
 
     # ПРАВКА #26: bold prefix + hard break → отдельные параграфы
+    # ПРАВКА #29: не резать блоки реквизитов/стадий — их префиксы ловят
+    # is_requisites_block (case-sensitive) и is_stage_paragraph (IGNORECASE)
     md_text = re.sub(
-        r'^(\*\*[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
+        r'^(\*\*(?!(?:Кому|От кого|(?i:Стадия|Фаза|Шаг|Этап|ВАЖНО)))[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
         r'\1\n\n',
         md_text,
         flags=re.MULTILINE,
