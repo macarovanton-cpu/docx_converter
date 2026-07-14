@@ -437,6 +437,19 @@ def add_callout_box(doc, text, content_width_cm):
         r.bold = True
 
 
+# ПРАВКА #30: компактный пустой параграф-спейсер после таблиц-блоков,
+# чтобы соседние w:tbl не склеивались Word'ом в одну таблицу
+def add_compact_spacer(doc):
+    sp = doc.add_paragraph()
+    pPr = sp._p.get_or_add_pPr()
+    s = OxmlElement('w:spacing')
+    s.set(qn('w:before'), '0')
+    s.set(qn('w:after'), '120')
+    s.set(qn('w:line'), '120')
+    s.set(qn('w:lineRule'), 'exact')
+    pPr.append(s)
+
+
 def add_table_cell_content(p, text, font_size=10):
     """
     ПРАВКА #8: Добавляет ✓/✗ перед значениями «Да»/«Нет» в ячейках таблицы.
@@ -805,6 +818,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             pending_intro_after_h1 = False   # ПРАВКА #12
             # ПРАВКА #6: новый тип блока — оформляется как акцентная таблица
             add_callout_box(doc, block, content_width_cm)
+            # ПРАВКА #30: спейсер, иначе callout склеивается со следующим w:tbl
+            add_compact_spacer(doc)
             after_heading = False
 
         # ── Встроенные картинки (ПРАВКА #23) ─────────────────────────────────
