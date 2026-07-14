@@ -54,6 +54,7 @@ streamlit run app.py
 
 ## Ограничения
 
+- Выравнивание колонок таблиц из Markdown-сепаратора (`:----`, `:---:`, `----:`) не реализовано — строка-сепаратор просто отфильтровывается, все колонки рендерятся с выравниванием по умолчанию.
 - OCR реализован и подключён к UI режима `Файлы -> Markdown` (режим `auto`). Для PDF без текстового слоя (с учётом выбранного диапазона страниц) выполняется `ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`, после чего MarkItDown извлекает текст из OCR-слоя. Важное прод-ограничение см. в разделе «Известное ограничение прода» ниже.
 - Диапазоны страниц сейчас поддержаны только для PDF.
 - Для DOCX/XLSX/PPTX выполняется конвертация всего файла. Если для этих форматов указан page range, приложение покажет ограничение.
@@ -68,7 +69,7 @@ OCR-режим `auto` реализован и подключён к UI, но `oc
 Шесть Python-модулей:
 
 - **`app.py`** — Streamlit UI. Содержит режимы `Markdown -> DOCX` и `Файлы -> Markdown`. В первом режиме загружает `.docx` шаблон с Google Drive через service account, вызывает `convert_md_to_docx`, отдаёт результат на скачивание. Во втором режиме принимает несколько файлов, вызывает MarkItDown-слой и отдаёт `.md`/ZIP на скачивание.
-- **`convert.py`** — ядро Markdown → DOCX (~705 строк). Единственная публичная функция: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`.
+- **`convert.py`** — ядро Markdown → DOCX (~1150 строк). Единственная публичная функция: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`.
 - **`file_converter.py`** — обратная сторона: DOCX/PDF/TXT → Markdown для предзаполнения редактора, а также отдельный MarkItDown-слой (`convert_with_markitdown`) для PDF/DOCX/XLSX/PPTX → Markdown и диагностика PDF (`analyze_pdf_pages` через pypdf).
 - **`markdown_cleanup.py`** — детерминированная OCR-чистка Markdown (`cleanup_ocr_markdown`). Покрыта тестами, но **не подключена к тракту/UI** (backend-only).
 - **`ocr_auto_mode.py`** — оркестратор «OCR или нет» (`convert_pdf_with_optional_ocr`): по диагностике страниц решает, гнать ли PDF через OCR, с учётом выбранного диапазона страниц.

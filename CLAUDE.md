@@ -94,20 +94,13 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way.
 
-**Known gap: `#25` does not exist in the code.** The file contains #1–#24, #26, #27. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out. Do not assume README's edit list is accurate; verify against the code.
+**Known gap: `#25` does not exist in the code.** The file contains #1–#24, #26–#33. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out. Do not assume README's edit list is accurate; verify against the code.
 
-## Known issues (from audit — fix before new features)
+## Known issues
 
-The audit found real interaction bugs between edits. Treat these as live until closed:
+The P0 audit findings were fixed in the #28–#33 cycle (CRLF normalization; #26 vs requisites/stage blocks; callout spacer; numbered-list detection and restart; `![alt](src)` garbage hyperlinks; table cell split/padding). The audit battery lives in the session scratchpad (`run_audit*.py`) — rerun it after touching block dispatch, lists, tables, or the inline parser.
 
-- **CRLF input collapses the whole document into one H1 paragraph** — `md_text.split('\n\n')` finds no block boundaries in `\r\n\r\n`. Any `.md` saved on Windows hits this. Nothing normalizes the input.
-- **Numbered lists share one counter document-wide** — a second list continues 4, 5 instead of restarting at 1.
-- **`#26` (hard-break preprocessing) cuts requisites and stage blocks in half** — it runs before block dispatch and does not exclude the `Кому:` / `ВАЖНО:` prefixes.
-- **Callout boxes merge with an adjacent table** — the callout branch does not emit a spacer paragraph, so two `w:tbl` end up adjacent and Word renders them as one table.
-- **`![alt](src)` produces a garbage hyperlink** to `https://image_1.png` when the image is inline or `images` is empty.
-- **Table rows silently drop extra cells** and `\|` breaks the cell split.
-
-Documented long-standing limits: pseudo-headings without applied Word styles (mammoth cannot detect them); double-digit page numbers render vertically in LibreOffice.
+Documented long-standing limits: column alignment from `:----` separators is not implemented; list markers are capped at 2 digits (`^\d{1,2}\. `) so years like «2025.» are not eaten as list items; pseudo-headings without applied Word styles (mammoth cannot detect them); double-digit page numbers render vertically in LibreOffice.
 
 ## Constraints
 
