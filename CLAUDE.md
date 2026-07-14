@@ -2,6 +2,31 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working principles
+
+These are the rules of engagement. Read them before touching code.
+
+**Plan first, then execute.** Start non-trivial work in plan mode. Iterate on the plan until it is right, then switch to auto-accept and let the implementation run in one go. A good plan is the highest-leverage artifact in the session — a bad plan produces 40 changes nobody asked for.
+
+**Verify your own work.** Never hand back code you have not checked. Run `pytest -v`. Run the audit battery in `scratchpad/audit/`. Generate a real `.docx` and inspect it programmatically with `python-docx` (styles, alignment, breaks) — do not assume the output is correct because the code looks correct. Self-verification is worth more than confidence.
+
+**Every mistake becomes a rule.** When a bug or a wrong assumption is found, do not just fix the code — add the rule to this file so it is not repeated. This file is the project's memory across sessions. Keep it under ~200 lines so it is actually read.
+
+**Small, independent changes.** One `# ПРАВКА #N` = one problem = one commit with a descriptive message. Do not bundle unrelated fixes. Do not opportunistically refactor code you were not asked to touch.
+
+**The human stays in the review seat.** Architectural decisions, brand rules, and what ships to clients are the human's call. Ask one clarifying question when the spec is ambiguous — do not guess.
+
+**AI-written code is statistically dirty.** Plausible-looking code that passes tests can still be conceptually wrong: redundant loops, silently dropped data, edge cases that never fire. Bugs here are conceptual, not syntactic. Assume this about your own output and look for it.
+
+## Forbidden patterns
+
+- Do **not** change the signature `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)` — `app.py` depends on it. Extend with optional parameters only.
+- Do **not** collapse the numbered `# ПРАВКА #N` edits into a general-purpose constructor. The flat numbered structure is deliberate and is what makes debugging possible.
+- Do **not** split `convert.py` into multiple files. The monolith is a conscious choice.
+- Do **not** propose a different stack (Pandoc, Quarto, mdbook). The stack is chosen and works.
+- Do **not** add dependencies to `requirements.txt` without explicit agreement — Streamlit Cloud does a cold build.
+- Do **not** silently swallow data. If a table row has extra cells, a URL is malformed, or an image fails to decode — surface it, do not drop it. Silent corruption in a client-facing КП is the worst failure mode this project has.
+
 ## Running the app
 
 ```bash
@@ -18,15 +43,20 @@ python convert.py   # uses INPUT_FILE / OUTPUT_FILE / TEMPLATE_FILE at the top o
 
 ## Deployment
 
-Push to `main` → Streamlit Cloud picks it up automatically. No CI step required.
+Push to `main` → Streamlit Cloud picks it up automatically. No CI step required. **Claude Code does not push — the human pushes.**
 
 ## Architecture
 
-Three Python modules:
+Six Python modules:
 
-- **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types (label, Drive file ID, local fallback path, filename stem, Markdown hint).
-- **`convert.py`** — Core Markdown → DOCX engine (~705 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. This signature must not change — `app.py` depends on it. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, and writes the result via `python-docx`.
-- **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Used by `app.py` to pre-fill the editor when the user uploads an existing document.
+- **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types.
+- **`convert.py`** — Core Markdown → DOCX engine (~1050 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
+- **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Also hosts the `Файлы -> Markdown` MarkItDown layer (`convert_with_markitdown`) and PDF diagnostics (`analyze_pdf_pages`, via pypdf).
+- **`markdown_cleanup.py`** — Deterministic OCR Markdown cleanup (`cleanup_ocr_markdown`). Covered by tests but **not connected to the UI or conversion flow** — backend-only.
+- **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
+- **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Also provides `check_ocr_dependencies`.
+
+OCR pipeline (mode `auto` in `Файлы -> Markdown`): `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
 
 ## Brand constants (convert.py)
 
@@ -62,14 +92,32 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 ## Numbered edits convention
 
-`convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes to defaults. Current highest: **#11** (signature block page-break lock). New edits must be numbered starting at **#12** and marked the same way.
+`convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way.
+
+**Known gap: `#25` does not exist in the code.** The file contains #1–#24, #26, #27. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out. Do not assume README's edit list is accurate; verify against the code.
+
+## Known issues (from audit — fix before new features)
+
+The audit found real interaction bugs between edits. Treat these as live until closed:
+
+- **CRLF input collapses the whole document into one H1 paragraph** — `md_text.split('\n\n')` finds no block boundaries in `\r\n\r\n`. Any `.md` saved on Windows hits this. Nothing normalizes the input.
+- **Numbered lists share one counter document-wide** — a second list continues 4, 5 instead of restarting at 1.
+- **`#26` (hard-break preprocessing) cuts requisites and stage blocks in half** — it runs before block dispatch and does not exclude the `Кому:` / `ВАЖНО:` prefixes.
+- **Callout boxes merge with an adjacent table** — the callout branch does not emit a spacer paragraph, so two `w:tbl` end up adjacent and Word renders them as one table.
+- **`![alt](src)` produces a garbage hyperlink** to `https://image_1.png` when the image is inline or `images` is empty.
+- **Table rows silently drop extra cells** and `\|` breaks the cell split.
+
+Documented long-standing limits: pseudo-headings without applied Word styles (mammoth cannot detect them); double-digit page numbers render vertically in LibreOffice.
 
 ## Constraints
 
 - **`template.docx`** lives on Google Drive — do not add it to the repo and do not modify it.
 - **`app.py`, `file_converter.py`, `requirements.txt`, `.devcontainer/*`** — edit only on explicit request.
-- **No new `requirements.txt` dependencies** without prior agreement.
-- `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)` signature is fixed.
+- Code must run on both Windows (local) and Linux (prod).
+
+## Known production limitation
+
+OCR `auto` is implemented and wired into the UI, but `ocrmypdf` is **not** in `requirements.txt` and there is no `packages.txt`. On Streamlit Community Cloud the system Tesseract/Ghostscript binaries are unavailable, so OCR `auto` currently fails in production. Open question, resolved by a separate packaging task — do not add `ocrmypdf` to `requirements.txt` or create `packages.txt` as part of unrelated work.
 
 ## Secrets
 
@@ -79,7 +127,6 @@ Local dev requires `.streamlit/secrets.toml` (git-ignored):
 [gcp_service_account]
 type = "service_account"
 project_id = "..."
-private_key_id = "..."
 private_key = "..."
 client_email = "..."
 # … remaining service account fields

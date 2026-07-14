@@ -1,6 +1,6 @@
 # docx_converter Project Status
 
-Last updated: 2026-06-12
+Last updated: 2026-07-08
 
 ## Current State
 
@@ -34,6 +34,15 @@ Current import capability:
 - temporary file cleanup.
 
 The `feature/markitdown-import` PR has been merged into `main`.
+
+## Known Production Limitation
+
+OCR `auto` mode is implemented and wired into the UI, but it currently fails in
+production. `ocrmypdf` is not in `requirements.txt` and there is no
+`packages.txt`, so on Streamlit Community Cloud the system Tesseract/Ghostscript
+binaries are unavailable. This is an open question to be resolved by a separate
+packaging task, consistent with "Do not add OCR to the main requirements.txt
+without a packaging decision" below.
 
 ## Current Phase
 
