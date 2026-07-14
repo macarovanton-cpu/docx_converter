@@ -1,3 +1,4 @@
+import io
 import os
 import re
 from docx import Document
@@ -295,14 +296,30 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
 
 
 def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
-                          font_color=TEXT_DARK, is_italic_base=False):
-    """Обрабатывает ***жирный-курсив***, **жирный**, *курсив* и [ссылки](url)."""
+                          font_color=TEXT_DARK, is_italic_base=False,
+                          images=None, content_width_cm=None):
+    """Обрабатывает ***жирный-курсив***, **жирный**, *курсив*, [ссылки](url)
+    и инлайн-картинки ![alt](src) (ПРАВКА #32)."""
     text = re.sub(r'\\([.\-+_)(:!=])', r'\1', text)      # ПРАВКА #24: раскрытие markdown-экранирования \X → X
     # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
-    link_re = re.compile(r'(\[[^\]]+?\]\([^)]*?\))')
+    # ПРАВКА #32: ![alt](src) распознаётся ДО ссылок — раньше «!» оставался
+    # литералом, а src превращался в мусорную гиперссылку https://image_1.png
+    link_re = re.compile(r'(!?\[[^\]]*?\]\([^)]*?\))')
+    img_detail = re.compile(r'^!\[([^\]]*?)\]\(([^)]*?)\)$')
     link_detail = re.compile(r'^\[([^\]]+?)\]\(([^)]*?)\)$')
     for segment in link_re.split(text):
         if not segment:
+            continue
+        mi = img_detail.match(segment)
+        if mi:
+            alt, src = mi.group(1).strip(), mi.group(2).strip()
+            if images and src in images:
+                run = paragraph.add_run()
+                run.add_picture(io.BytesIO(images[src]),
+                                width=_image_width(images[src], content_width_cm))
+            elif alt:
+                _parse_bold_italic(paragraph, alt, font_name,
+                                   font_size, font_color, is_italic_base)
             continue
         m = link_detail.match(segment)
         if m:
@@ -318,20 +335,28 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                                font_size, font_color, is_italic_base)
 
 
+# ПРАВКА #32: расчёт ширины картинки вынесен из _add_inline_image,
+# используется и блочной, и инлайн-вставкой
+def _image_width(img_bytes, content_width_cm):
+    if content_width_cm is None:
+        content_width_cm = CONTENT_WIDTH_CM
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(img_bytes))
+        w_px, _ = img.size
+        img.close()
+        w_cm = w_px / 96 * 2.54
+        return Cm(min(w_cm, content_width_cm))
+    except Exception:
+        return Cm(content_width_cm)
+
+
 def _add_inline_image(doc, img_bytes, content_width_cm):
     import tempfile
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
     tmp.write(img_bytes)
     tmp.close()
-    try:
-        from PIL import Image
-        img = Image.open(tmp.name)
-        w_px, _ = img.size
-        img.close()
-        w_cm = w_px / 96 * 2.54
-        width = Cm(min(w_cm, content_width_cm))
-    except Exception:
-        width = Cm(content_width_cm)
+    width = _image_width(img_bytes, content_width_cm)   # ПРАВКА #32
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.add_run().add_picture(tmp.name, width=width)
@@ -855,15 +880,28 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             after_heading = False
 
         # ── Встроенные картинки (ПРАВКА #23) ─────────────────────────────────
-        elif _images_dict and _IMG_BLOCK_RE.match(block):
+        # ПРАВКА #32: ветка работает и при пустом images — раньше блок падал
+        # в inline-парсер и превращался в «!» + мусорную гиперссылку
+        elif _IMG_BLOCK_RE.match(block):
             pending_intro_after_h1 = False
             m = _IMG_BLOCK_RE.match(block)
-            img_src = m.group(2)
+            alt, img_src = m.group(1).strip(), m.group(2).strip()
             if img_src in _images_dict:
                 _add_inline_image(doc, _images_dict[img_src], content_width_cm)
+            elif is_photo_placeholder(alt):
+                # alt — фото-плейсхолдер: рендерим как ветку 📷 ниже
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent  = Cm(1.0)
+                p.paragraph_format.space_before = Pt(10)
+                p.paragraph_format.space_after  = Pt(10)
+                add_paragraph_border(p, 'left', BRAND_ORANGE, 18)
+                add_paragraph_shading(p, BG_LIGHT_ORANGE)
+                parse_inline_markdown(p, alt, 'PT Sans', 11, "999999",
+                                      is_italic_base=True)
             else:
                 p = doc.add_paragraph()
-                parse_inline_markdown(p, f'(изображение не найдено: {img_src})')
+                parse_inline_markdown(
+                    p, f'{alt} (изображение не найдено: {img_src})'.strip())
             after_heading = False
 
         # ── Плейсхолдеры фото ────────────────────────────────────────────────
@@ -907,7 +945,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 p.paragraph_format.left_indent       = Cm(1.5)
                 p.paragraph_format.first_line_indent = Cm(-0.75)
                 p.paragraph_format.space_after       = Pt(4)
-                parse_inline_markdown(p, re.sub(r'^(\- |\* |\d{1,2}\. )', '', line))  # ПРАВКА #31: синхронно с is_num
+                parse_inline_markdown(p, re.sub(r'^(\- |\* |\d{1,2}\. )', '', line),  # ПРАВКА #31: синхронно с is_num
+                                      images=_images_dict, content_width_cm=content_width_cm)  # ПРАВКА #32
                 last_list_paragraph = p
                 last_regular_paragraph = p
             after_heading = False
@@ -1070,7 +1109,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 line = line.strip()
                 if not line: continue
                 if i > 0: p.add_run().add_break()
-                parse_inline_markdown(p, line)
+                parse_inline_markdown(p, line, images=_images_dict,
+                                      content_width_cm=content_width_cm)  # ПРАВКА #32
             last_regular_paragraph = p
             # ПРАВКА #20: лид-абзац (целиком жирный) держится со следующим блоком
             stripped_block = block.strip()
