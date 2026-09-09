@@ -98,3 +98,47 @@ def test_emphasis_with_inner_space_still_works(tmp_path):
     """Пробелы внутри эмфазы разрешены — правило касается только флангов."""
     assert ("две слова", False, True) in _runs("Тут *две слова* курсивом.",
                                                tmp_path)
+
+
+# ПРАВКА #37: экранированные спецсимволы выводятся буквально
+def test_escaped_asterisks_are_literal(tmp_path):
+    runs = _runs(r"Звёздочки: \*звёздочки вокруг слова\* — курсива нет.",
+                 tmp_path)
+    assert "*звёздочки вокруг слова*" in "".join(t for t, _, _ in runs)
+    assert not any(italic for _, _, italic in runs)
+
+
+def test_escaped_specials_lose_backslash(tmp_path):
+    md = (r"Решётка \# и скобки \[ГОСТ 29329-92\], черта \| и черта \_, "
+          r"кавычка \` и стрелка \> — все на месте.")
+    text = _text(md, tmp_path)
+    assert "\\" not in text
+    for symbol in "#[]|_`>":
+        assert symbol in text, symbol
+
+
+def test_escaped_brackets_do_not_create_link(tmp_path):
+    """Экранированные скобки не должны собраться в гиперссылку с (url)."""
+    out = tmp_path / "esc_link.docx"
+    convert_md_to_docx(r"Ссылка \[ГОСТ 29329-92\](https://example.com) нет.",
+                       str(out))
+    doc = Document(str(out))
+    assert "[ГОСТ 29329-92](https://example.com)" in "".join(
+        p.text for p in doc.paragraphs)
+    assert not doc.element.body.findall('.//' + qn('w:hyperlink'))
+
+
+def test_real_link_still_works(tmp_path):
+    out = tmp_path / "link.docx"
+    convert_md_to_docx("Ссылка [сайт](https://tenzosila.ru) работает.",
+                       str(out))
+    doc = Document(str(out))
+    assert doc.element.body.findall('.//' + qn('w:hyperlink'))
+
+
+def test_no_placeholder_leaks(tmp_path):
+    """Ни один символ private use area не должен доехать до документа."""
+    md = (r"Звёздочка \*, скобки \[x\], ссылка [сайт](https://tenzosila.ru), "
+          r"курсив *да* и жирный **да**.")
+    assert not [c for c in _text(md, tmp_path)
+            if chr(0xE000) <= c <= chr(0xF8FF)]
