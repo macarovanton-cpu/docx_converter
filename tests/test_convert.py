@@ -418,3 +418,25 @@ def test_table_with_blank_line_after_is_unchanged(tmp_path):
                tmp_path, "tbl_gap.docx")
     assert len(doc.tables[0].rows) == 2
     assert "Следующий абзац." in [p.text for p in doc.paragraphs]
+
+
+# =============================================================================
+# ПРАВКА #46: в tblPr ровно один w:tblLayout
+# =============================================================================
+
+def test_every_table_has_exactly_one_tbl_layout(tmp_path):
+    """table.autofit сам пишет w:tblLayout — ручной код добавлял второй.
+    Проверяются все три вида таблиц: данные, интро-врезка, callout."""
+    doc = _doc("# Заголовок\n\nВводный абзац во врезке.\n\n"
+               "!! Callout-врезка !!\n\n"
+               "| A | B |\n|---|---|\n| 1 | 2 |", tmp_path, "layout.docx")
+    assert len(doc.tables) == 3
+    for t in doc.tables:
+        layouts = t._tbl.find(qn('w:tblPr')).findall(qn('w:tblLayout'))
+        assert len(layouts) == 1
+
+
+def test_data_table_layout_is_autofit(tmp_path):
+    doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |", tmp_path, "autofit.docx")
+    layout = doc.tables[0]._tbl.find(qn('w:tblPr')).find(qn('w:tblLayout'))
+    assert layout.get(qn('w:type')) == "autofit"

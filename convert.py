@@ -456,7 +456,7 @@ def add_intro_paragraph(doc, block, content_width_cm):
     Выглядит как акцентный callout для главной мысли документа.
     """
     table = doc.add_table(rows=1, cols=1)
-    table.autofit = table.allow_autofit = False
+    table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
     set_table_no_spacing(table)
 
@@ -511,7 +511,7 @@ def add_callout_box(doc, text, content_width_cm):
     """
     clean = text.strip('!').strip()
     table = doc.add_table(rows=1, cols=1)
-    table.autofit = table.allow_autofit = False
+    table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
 
     cell = table.rows[0].cells[0]
@@ -1055,14 +1055,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             n_cols   = len(headers)
             table    = doc.add_table(rows=1, cols=n_cols)
             # ПРАВКА #16: autofit для распределения ширин по содержимому
+            # ПРАВКА #46: table.autofit сам пишет w:tblLayout — ручной код
+            # добавлял второй такой же элемент в каждую таблицу.
             table.autofit = True
-            table.allow_autofit = True
             set_table_width_dxa(table, content_width_cm)
-            # tblLayout=auto чтобы Word распределял ширины колонок
-            tblPr = table._tbl.find(qn('w:tblPr'))
-            tblLayout = OxmlElement('w:tblLayout')
-            tblLayout.set(qn('w:type'), 'autofit')
-            tblPr.append(tblLayout)
 
             # ПРАВКА #7: заголовочная строка — увеличена высота и шрифт
             set_row_height(table.rows[0], 560)   # ~1cm минимальная высота
