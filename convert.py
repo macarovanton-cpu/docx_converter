@@ -89,9 +89,14 @@ _CHILD_ORDER = {
 
 
 def insert_in_order(parent, child):
-    """ПРАВКА #50: ставит элемент туда, где его ждёт схема OOXML."""
-    order = _CHILD_ORDER[parent.tag.split('}')[-1]]
+    """ПРАВКА #50: ставит элемент туда, где его ждёт схема OOXML.
+    Родитель или тег без известного порядка — фолбэк на append (как до #50),
+    чтобы будущие вызовы с непокрытыми тегами не падали."""
+    order = _CHILD_ORDER.get(parent.tag.split('}')[-1])
     tag = child.tag.split('}')[-1]
+    if order is None or tag not in order:
+        parent.append(child)
+        return child
     successors = order[order.index(tag) + 1:]
     return parent.insert_element_before(child, *('w:' + s for s in successors))
 
@@ -1185,8 +1190,9 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
             # ПРАВКА #35: шапка повторяется на каждой странице,
             # строка не разрывается пополам между страницами
-            # ПРАВКА #49: по схеме OOXML внутри trPr cantSplit идёт перед
-            # tblHeader — append ставил их в обратном порядке
+            # ПРАВКА #49: порядок выровнен для единообразия с остальными
+            # элементами (CT_TrPrBase — xsd:choice maxOccurs="unbounded",
+            # схема порядок внутри trPr не регламентирует)
             for row in table.rows:
                 set_row_flag(row, 'w:cantSplit')
             set_row_flag(table.rows[0], 'w:tblHeader')
