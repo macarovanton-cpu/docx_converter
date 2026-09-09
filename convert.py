@@ -359,7 +359,7 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
             continue
         mi = img_detail.match(segment)
         if mi:
-            alt = mi.group(1).strip()
+            alt = _unshield_escapes(mi.group(1).strip())    # ПРАВКА #37
             src = _unshield_escapes(mi.group(2).strip())   # ПРАВКА #37
             if images and src in images:
                 run = paragraph.add_run()

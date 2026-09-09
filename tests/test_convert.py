@@ -122,6 +122,13 @@ def test_escaped_specials_lose_backslash(tmp_path):
         assert symbol in text, symbol
 
 
+def test_missing_image_caption_unshields_escaped_brackets(tmp_path):
+    md = r"Текст перед ![Схема \[черновик\]](missing.png) текст после."
+    text = _text(md, tmp_path)
+    assert "[черновик]" in text
+    assert not any(0xE000 <= ord(c) <= 0xE0FF for c in text)
+
+
 def test_escaped_brackets_do_not_create_link(tmp_path):
     """Экранированные скобки не должны собраться в гиперссылку с (url)."""
     out = tmp_path / "esc_link.docx"
