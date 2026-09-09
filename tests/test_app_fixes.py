@@ -1,5 +1,11 @@
 """Тесты трёх падений в app.py (запускать из docx_converter/)."""
+from pathlib import Path
+
+from docx import Document
+from docx.shared import Pt, RGBColor
+
 import app
+from convert import convert_md_to_docx
 
 
 class _FakeUpload:
@@ -47,3 +53,31 @@ def test_drive_available_with_service_account(monkeypatch):
     monkeypatch.setattr(app.st, "secrets", {"gcp_service_account": {}})
 
     assert app._drive_secrets_available() is True
+
+
+BOM_FIXTURE = Path(__file__).resolve().parents[1] / "test_formatting_bom.md"
+
+
+def test_decode_md_upload_strips_bom():
+    md_text = app._decode_md_upload(BOM_FIXTURE.read_bytes())
+
+    assert "﻿" not in md_text
+    assert md_text.startswith("# ")
+
+
+def test_decode_md_upload_falls_back_to_cp1251():
+    assert app._decode_md_upload("Тест кириллицы".encode("cp1251")) == "Тест кириллицы"
+
+
+def test_bom_fixture_first_block_renders_as_h1(tmp_path):
+    """BOM не должен превращать H1 в обычный абзац."""
+    md_text = app._decode_md_upload(BOM_FIXTURE.read_bytes())
+    out = tmp_path / "bom.docx"
+    convert_md_to_docx(md_text, str(out))
+
+    first = Document(str(out)).paragraphs[0]
+    run = first.runs[0]
+    assert not first.text.startswith("#")
+    assert run.font.name == "PT Sans Narrow"
+    assert run.font.size == Pt(18)
+    assert run.font.color.rgb == RGBColor.from_string("015198")

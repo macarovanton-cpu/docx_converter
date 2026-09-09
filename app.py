@@ -74,6 +74,15 @@ def _normalize_page_range(range_text: str | None) -> str | None:
     return value
 
 
+def _decode_md_upload(data: bytes) -> str:
+    """utf-8-sig срезает BOM: без этого первый '# Title' не распознаётся
+    как H1, cp1251 — откат для файлов из Windows-редакторов."""
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1251", errors="replace")
+
+
 def _safe_md_filename(filename: str) -> str:
     stem = filename.rsplit('.', 1)[0]
     stem = re.sub(r'[^\w\-а-яА-ЯёЁ]+', '_', stem, flags=re.UNICODE).strip('_')
@@ -314,7 +323,7 @@ def render_md_to_docx_mode():
             upl_md = st.file_uploader("MD файл", type=["md", "txt"],
                                       label_visibility="collapsed", key="upl_md")
             if upl_md:
-                md_text = upl_md.read().decode("utf-8")
+                md_text = _decode_md_upload(upl_md.read())
                 st.success(
                     f"Загружен: **{upl_md.name}** · {len(md_text)} символов")
                 with st.expander("👁 Превью", expanded=False):
