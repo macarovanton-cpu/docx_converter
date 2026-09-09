@@ -2,6 +2,7 @@
 
 import pytest
 from docx import Document
+from docx.oxml.ns import qn
 
 from convert import convert_md_to_docx
 
@@ -41,3 +42,12 @@ def test_table_row_count(table):
 @pytest.mark.parametrize("src,expected", CASES)
 def test_cell_text_survives_icon(cells, src, expected):
     assert cells[src] == expected
+
+
+def test_header_repeats_and_rows_do_not_split(table):
+    """ПРАВКА #35: tblHeader только на шапке, cantSplit на каждой строке."""
+    headers = [i for i, r in enumerate(table.rows)
+               if r._tr.find(qn('w:trPr')).find(qn('w:tblHeader')) is not None]
+    assert headers == [0]
+    assert all(r._tr.find(qn('w:trPr')).find(qn('w:cantSplit')) is not None
+               for r in table.rows)

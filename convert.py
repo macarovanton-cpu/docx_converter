@@ -159,6 +159,15 @@ def set_row_height(row, height_dxa):
     trPr.append(trHeight)
 
 
+def set_row_flag(row, tag):
+    """ПРАВКА #35: булев флаг строки таблицы: 'w:tblHeader' | 'w:cantSplit'."""
+    trPr = row._tr.find(qn('w:trPr'))
+    if trPr is None:
+        trPr = OxmlElement('w:trPr')
+        row._tr.insert(0, trPr)
+    trPr.append(OxmlElement(tag))
+
+
 def set_keep_with_next(paragraph):
     """Параграф остаётся на той же странице что и следующий."""
     pPr = paragraph._p.get_or_add_pPr()
@@ -1028,6 +1037,12 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                         p.paragraph_format.space_after = Pt(0)
                         # ПРАВКА #8: автоматические ✓/✗ для Да/Нет/Отсутствует
                         add_table_cell_content(p, c, font_size=10)
+
+            # ПРАВКА #35: шапка повторяется на каждой странице,
+            # строка не разрывается пополам между страницами
+            set_row_flag(table.rows[0], 'w:tblHeader')
+            for row in table.rows:
+                set_row_flag(row, 'w:cantSplit')
 
             # Компактный отступ после таблицы
             sp = doc.add_paragraph()
