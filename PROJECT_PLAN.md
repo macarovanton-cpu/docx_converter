@@ -1,6 +1,6 @@
 # docx_converter Project Plan
 
-Last updated: 2026-06-02
+Last updated: 2026-09-10
 
 ## Roadmap
 
@@ -32,24 +32,24 @@ The `feature/markitdown-import` work added:
 
 ### 3. OCR For Scanned PDFs
 
-Status: next major phase.
+Status: stages 1-3 done, stage 5 partial.
 
 Goal: support scanned/image-only PDFs by producing a searchable OCR PDF first,
 then converting that OCR PDF to Markdown through the existing import flow.
 
 Small stages:
 
-1. OCR backend wrapper
+1. OCR backend wrapper — done.
    - Add a small `ocr_converter.py` module.
    - Call OCRmyPDF through `sys.executable -m ocrmypdf`.
    - Check local OCR dependencies without changing the UI.
 
-2. OCR mode in UI
+2. OCR mode in UI — done.
    - Add an explicit OCR mode after the backend wrapper is stable.
    - Keep OCR opt-in.
    - Do not change the default Markdown to DOCX workflow.
 
-3. OCR raw Markdown
+3. OCR raw Markdown — done.
    - Convert searchable OCR PDFs through the current PDF to Markdown path.
    - Preserve raw OCR Markdown as a downloadable/debuggable output.
 
@@ -59,10 +59,13 @@ Small stages:
      both.
    - Keep cleanup optional until quality and costs are understood.
 
-5. Tests
-   - Add focused tests for OCR wrapper command construction and errors.
-   - Add integration/manual checks for local OCR dependencies.
-   - Protect existing Markdown to DOCX and MarkItDown import behavior.
+5. Tests — partial.
+   - Add focused tests for OCR wrapper command construction and errors. — not
+     done: no tests exercise `ocr_converter.py` directly.
+   - Add integration/manual checks for local OCR dependencies. — not done.
+   - Protect existing Markdown to DOCX and MarkItDown import behavior. — done:
+     `tests/test_convert.py`, `tests/test_ocr_auto_mode.py`, and
+     `tests/test_pdf_core.py` cover this.
 
 ## Not Now
 
