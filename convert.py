@@ -199,7 +199,9 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
         return None
     url = _unshield_escapes(url.strip())            # ПРАВКА #37
     url = re.sub(r'\\([._\-+~#?&=/])', r'\1', url)      # ПРАВКА #24: раскрытие markdown-экранирования в URL
-    if not re.match(r'^https?://', url):
+    # ПРАВКА #38: префикс добавляется только если схемы нет вообще — иначе
+    # mailto:/tel:/ftp: превращались в мёртвый https://mailto:sales@tenzosila.ru
+    if not re.match(r'^[a-z][a-z0-9+.\-]*:', url, re.I):
         url = 'https://' + url
     r_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
     hyperlink = OxmlElement('w:hyperlink')
@@ -341,6 +343,11 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
         run.text = _unshield_escapes(clean_text)   # ПРАВКА #37
 
 
+# ПРАВКА #39: одна формулировка заглушки на блочный и инлайн путь
+def _missing_image_text(alt, src):
+    return f'{alt} (изображение не найдено: {src})'.strip()
+
+
 def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                           font_color=TEXT_DARK, is_italic_base=False,
                           images=None, content_width_cm=None):
@@ -351,9 +358,20 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
     # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
     # ПРАВКА #32: ![alt](src) распознаётся ДО ссылок — раньше «!» оставался
     # литералом, а src превращался в мусорную гиперссылку https://image_1.png
-    link_re = re.compile(r'(!?\[[^\]]*?\]\([^)]*?\))')
+    # ПРАВКА #38: <схема:адрес> и голый http(s)-URL — альтернативы дописаны
+    # ПОСЛЕ markdown-ссылки, поэтому внутри [text](url) и ![alt](src) не
+    # срабатывают: re.split на каждой позиции берёт первую подошедшую.
+    # «(» в lookbehind — адрес сразу после скобки это markdown-адресат, а не
+    # проза: у экранированных \[…\] скобки уже спрятаны в PUA и первая
+    # альтернатива их не ловит, иначе (url) стал бы ложной автоссылкой.
+    link_re = re.compile(
+        r'(!?\[[^\]]*?\]\([^)]*?\)'
+        r'|<[a-z][a-z0-9+.\-]*:[^<>\s]+>'
+        r'|(?<![\w(])https?://[^\s<>()]*[^\s<>()\.,;:!?])', re.I)
     img_detail = re.compile(r'^!\[([^\]]*?)\]\(([^)]*?)\)$')
     link_detail = re.compile(r'^\[([^\]]+?)\]\(([^)]*?)\)$')
+    auto_detail = re.compile(r'^<([a-z][a-z0-9+.\-]*:[^<>\s]+)>$'
+                             r'|^(https?://[^\s<>]+)$', re.I)
     for segment in link_re.split(text):
         if not segment:
             continue
@@ -365,9 +383,12 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                 run = paragraph.add_run()
                 run.add_picture(io.BytesIO(images[src]),
                                 width=_image_width(images[src], content_width_cm))
-            elif alt:
-                _parse_bold_italic(paragraph, alt, font_name,
-                                   font_size, font_color, is_italic_base)
+            else:
+                # ПРАВКА #39: та же заглушка, что и у блочной картинки —
+                # раньше пустой alt давал молчаливое исчезновение
+                _parse_bold_italic(paragraph, _missing_image_text(alt, src),
+                                   font_name, font_size, font_color,
+                                   is_italic_base)
             continue
         m = link_detail.match(segment)
         if m:
@@ -379,6 +400,13 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
             else:
                 _parse_bold_italic(paragraph, link_text, font_name,
                                    font_size, font_color, is_italic_base)
+            continue
+        ma = auto_detail.match(segment)
+        if ma:
+            # ПРАВКА #38: текст автоссылки — адрес без угловых скобок
+            auto_url = _unshield_escapes(ma.group(1) or ma.group(2))   # ПРАВКА #37
+            add_hyperlink_run(paragraph, auto_url, auto_url,
+                              font_name, font_size)
         else:
             _parse_bold_italic(paragraph, segment, font_name,
                                font_size, font_color, is_italic_base)
@@ -933,8 +961,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                                       is_italic_base=True)
             else:
                 p = doc.add_paragraph()
-                parse_inline_markdown(
-                    p, f'{alt} (изображение не найдено: {img_src})'.strip())
+                parse_inline_markdown(p, _missing_image_text(alt, img_src))
             after_heading = False
 
         # ── Плейсхолдеры фото ────────────────────────────────────────────────
