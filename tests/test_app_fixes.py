@@ -28,3 +28,22 @@ def test_page_range_ignored_for_non_pdf(monkeypatch):
     assert result["error"] is None
     assert result["markdown"] == "# Документ"
     assert result["page_range"] == "all"
+
+
+class _RaisingSecrets:
+    """st.secrets на машине без .streamlit/secrets.toml."""
+
+    def __contains__(self, key):
+        raise FileNotFoundError("No secrets files found")
+
+
+def test_drive_unavailable_without_secrets_file(monkeypatch):
+    monkeypatch.setattr(app.st, "secrets", _RaisingSecrets())
+
+    assert app._drive_secrets_available() is False
+
+
+def test_drive_available_with_service_account(monkeypatch):
+    monkeypatch.setattr(app.st, "secrets", {"gcp_service_account": {}})
+
+    assert app._drive_secrets_available() is True

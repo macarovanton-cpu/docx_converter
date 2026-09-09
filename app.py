@@ -50,6 +50,17 @@ def get_template(use_drive, drive_file_id, local_path):
     return None
 
 
+def _drive_secrets_available() -> bool:
+    """Нет secrets.toml — работаем без Google Drive, а не падаем.
+
+    StreamlitSecretNotFoundError — подкласс FileNotFoundError.
+    """
+    try:
+        return "gcp_service_account" in st.secrets
+    except FileNotFoundError:
+        return False
+
+
 def _file_ext(filename: str) -> str:
     return filename.lower().rsplit('.', 1)[-1] if '.' in filename else ''
 
@@ -367,7 +378,7 @@ def render_md_to_docx_mode():
 
         if btn and md_text.strip():
             with st.spinner("Формирую документ..."):
-                use_drive = "gcp_service_account" in st.secrets
+                use_drive = _drive_secrets_available()
                 template_path = get_template(
                     use_drive=use_drive,
                     drive_file_id=config["drive_id"],
