@@ -791,7 +791,6 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         doc = Document(template_path)
         clear_body(doc)
         content_width_cm = CONTENT_WIDTH_CM
-        print(f"  Шаблон: {template_path}")
     else:
         doc = Document()
         section = doc.sections[0]
@@ -802,7 +801,6 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         section.top_margin    = Cm(2.54)
         section.bottom_margin = Cm(2.54)
         content_width_cm = 21.0 - 2.54 * 2
-        print("  ⚠️  Шаблон не найден — хедер не будет добавлен")
 
         footer   = doc.sections[0].footer
         footer_p = footer.paragraphs[0]
@@ -1225,8 +1223,9 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 p.paragraph_format.space_after = Pt(2)
             after_heading = False
 
+    # ПРАВКА #48: библиотечный код ничего не печатает. Эмодзи в stdout роняли
+    # конвертацию на cp1251-консоли Windows — костыль с -X utf8 больше не нужен.
     doc.save(output_filename)
-    print(f"✅ Готово! Файл сохранён: {output_filename}")
 
 
 # =============================================================================

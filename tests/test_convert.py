@@ -461,3 +461,22 @@ def test_double_asterisks_between_digits_survive(tmp_path):
 def test_ordinary_bold_still_works(md, word, tmp_path):
     """Обычный жирный текст правкой не задет — в том числе жирная цифра."""
     assert (word, True, False) in _runs(md, tmp_path)
+
+
+# =============================================================================
+# ПРАВКА #48: библиотечный код ничего не печатает
+# =============================================================================
+
+def test_conversion_prints_nothing(tmp_path, capsys):
+    """Эмодзи в stdout роняли конвертацию на cp1251-консоли Windows."""
+    convert_md_to_docx("# Заголовок\n\nАбзац.", str(tmp_path / "quiet.docx"))
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+@needs_template
+def test_conversion_with_template_prints_nothing(tmp_path, capsys):
+    convert_md_to_docx("# Заголовок\n\nАбзац.", str(tmp_path / "quiet_tpl.docx"),
+                       template_path=str(TEMPLATE))
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
