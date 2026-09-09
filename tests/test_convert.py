@@ -395,3 +395,26 @@ def test_single_numbered_list_keeps_one_num_id(tmp_path):
     doc = _doc("1. Первый\n2. Второй\n3. Третий", tmp_path, "one_list.docx")
     ids = [i for i in _num_ids(doc) if i is not None]
     assert len(set(ids)) == 1
+
+
+# =============================================================================
+# ПРАВКА #45: строка не с «|» завершает таблицу
+# =============================================================================
+
+def test_paragraph_right_under_table_stays_a_paragraph(tmp_path):
+    """Текст сразу под таблицей без пустой строки — обычный абзац,
+    а не лишняя строка таблицы."""
+    doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |\n"
+               "Абзац сразу под таблицей.", tmp_path, "tbl_tail.docx")
+    table = doc.tables[0]
+    assert len(table.rows) == 2
+    assert [c.text for c in table.rows[1].cells] == ["1", "2"]
+    assert "Абзац сразу под таблицей." in [p.text for p in doc.paragraphs]
+
+
+def test_table_with_blank_line_after_is_unchanged(tmp_path):
+    """Обычный случай — пустая строка после таблицы — не задет."""
+    doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |\n\nСледующий абзац.",
+               tmp_path, "tbl_gap.docx")
+    assert len(doc.tables[0].rows) == 2
+    assert "Следующий абзац." in [p.text for p in doc.paragraphs]

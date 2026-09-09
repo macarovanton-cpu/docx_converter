@@ -845,6 +845,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         flags=re.MULTILINE,
     )
 
+    # ПРАВКА #45: строка, не начинающаяся с «|», завершает таблицу. Без пустой
+    # строки перед ним абзац под таблицей всасывался лишней строкой таблицы.
+    md_text = re.sub(r'^(\|.*)\n(?=[^|\n])', r'\1\n\n', md_text,
+                     flags=re.MULTILINE)
+
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
 
