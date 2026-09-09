@@ -15,3 +15,6 @@ Thumbs.db
 _test/
 
 test_files/
+
+template.docx
+fixture_check.docx
