@@ -1,5 +1,9 @@
 """Тесты табличного рендерера convert.py (запускать из docx_converter/)."""
 
+import re
+import zipfile
+from pathlib import Path
+
 import pytest
 from docx import Document
 from docx.oxml.ns import qn
@@ -122,13 +126,6 @@ def test_escaped_specials_lose_backslash(tmp_path):
         assert symbol in text, symbol
 
 
-def test_missing_image_caption_unshields_escaped_brackets(tmp_path):
-    md = r"Текст перед ![Схема \[черновик\]](missing.png) текст после."
-    text = _text(md, tmp_path)
-    assert "[черновик]" in text
-    assert not any(0xE000 <= ord(c) <= 0xE0FF for c in text)
-
-
 def test_escaped_brackets_do_not_create_link(tmp_path):
     """Экранированные скобки не должны собраться в гиперссылку с (url)."""
     out = tmp_path / "esc_link.docx"
@@ -148,9 +145,31 @@ def test_real_link_still_works(tmp_path):
     assert doc.element.body.findall('.//' + qn('w:hyperlink'))
 
 
-def test_no_placeholder_leaks(tmp_path):
-    """Ни один символ private use area не должен доехать до документа."""
-    md = (r"Звёздочка \*, скобки \[x\], ссылка [сайт](https://tenzosila.ru), "
-          r"курсив *да* и жирный **да**.")
-    assert not [c for c in _text(md, tmp_path)
-            if chr(0xE000) <= c <= chr(0xF8FF)]
+# Символы, которые механизм экранирования (ПРАВКА #37) распаковывает
+# из \X обратно в X — как раз то, что не должно остаться со слэшем.
+_ESCAPABLE_CHARS = r'*_.\-+~#?&=:!()|>`\[\]'
+_BACKSLASH_ESCAPE_RE = re.compile(r'\\[' + _ESCAPABLE_CHARS + r']')
+
+
+def test_no_shield_placeholders_leak_into_document(tmp_path):
+    """Сквозная проверка механизма экранирования (ПРАВКА #37) целиком, а не
+    одной конкретной правки: гоняем весь test_formatting.md — с таблицами,
+    заголовками, подписями картинок, ссылками — через конвертацию и
+    убеждаемся, что ни в одном текстовом узле document.xml и ни в одном
+    адресе гиперссылки (word/_rels/document.xml.rels) не осталось ни
+    служебных PUA-плейсхолдеров, ни забытого экранирующего слэша."""
+    md_path = Path(__file__).resolve().parents[1] / "test_formatting.md"
+    md = md_path.read_text(encoding='utf-8')
+    out = tmp_path / "shield_check.docx"
+    convert_md_to_docx(md, str(out))
+
+    with zipfile.ZipFile(out) as z:
+        document_xml = z.read('word/document.xml').decode('utf-8')
+        rels_xml = z.read('word/_rels/document.xml.rels').decode('utf-8')
+
+    texts = re.findall(r'<w:t[^>]*>([^<]*)</w:t>', document_xml)
+    hyperlink_targets = re.findall(r'Target="([^"]*)"', rels_xml)
+    combined = ''.join(texts) + ''.join(hyperlink_targets)
+
+    assert not any(0xE000 <= ord(c) <= 0xE0FF for c in combined)
+    assert not _BACKSLASH_ESCAPE_RE.search(combined)
