@@ -916,6 +916,21 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             set_keep_with_next(p)
             after_heading = True
 
+        # ── H4–H6 ────────────────────────────────────────────────────────────
+        elif re.match(r'^#{4,6} ', block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
+            p = doc.add_paragraph()
+            p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(10)   # меньше, чем у H3 (14pt)
+            p.paragraph_format.space_after  = Pt(4)
+            # ПРАВКА #40: H5 и H6 оформляются как H4 — в деловых документах
+            # глубже четвёртого уровня не ходят. Без декоративных линий.
+            parse_inline_markdown(p, re.sub(r'^#{4,6} ', '', block),
+                                  'PT Sans Narrow', 12, TEXT_DARK)
+            for r in p.runs: r.bold = True
+            set_keep_with_next(p)
+            after_heading = True
+
         # ── Цитаты > ─────────────────────────────────────────────────────────
         elif block.startswith('>'):
             pending_intro_after_h1 = False   # ПРАВКА #12

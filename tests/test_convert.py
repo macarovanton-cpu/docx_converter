@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Pt
 
 from convert import convert_md_to_docx
 
@@ -236,3 +237,46 @@ def test_inline_missing_image_matches_block_placeholder(tmp_path):
     block = _text("![](missing_inline.png)", tmp_path)
     assert "(изображение не найдено: missing_inline.png)" in inline
     assert block.strip() and block.strip() in inline
+
+
+# =============================================================================
+# ПРАВКА #40: заголовки H4–H6
+# =============================================================================
+
+def _doc(md, tmp_path, name="doc.docx"):
+    out = tmp_path / name
+    convert_md_to_docx(md, str(out))
+    return Document(str(out))
+
+
+@pytest.mark.parametrize("hashes", ["####", "#####", "######"])
+def test_h4_h6_render_as_heading_not_literal_hashes(hashes, tmp_path):
+    """H4–H6 — настоящий заголовок: решётки не попадают в текст, оформление
+    одинаковое (PT Sans Narrow 12pt bold, TEXT_DARK, без подчёркиваний)."""
+    doc = _doc(f"{hashes} Заголовок уровня\n\nТело абзаца.", tmp_path,
+               f"h{len(hashes)}.docx")
+    head = doc.paragraphs[0]
+    assert head.text == "Заголовок уровня"
+    assert "#" not in head.text
+    run = head.runs[0]
+    assert run.bold
+    assert run.font.name == "PT Sans Narrow"
+    assert run.font.size == Pt(12)
+    assert str(run.font.color.rgb) == "1A1A1A"
+    assert head._p.find(qn('w:pPr')).find(qn('w:pBdr')) is None
+
+
+def test_h4_space_before_is_smaller_than_h3(tmp_path):
+    h3 = _doc("### Три\n\nТело.", tmp_path, "h3.docx").paragraphs[0]
+    h4 = _doc("#### Четыре\n\nТело.", tmp_path, "h4b.docx").paragraphs[0]
+    assert h4.paragraph_format.space_before < h3.paragraph_format.space_before
+
+
+@pytest.mark.parametrize("hashes", ["####", "#####", "######"])
+def test_intro_band_does_not_fire_after_h4_h6(hashes, tmp_path):
+    """ПРАВКА #12: интро-полоса — только сразу после H1. После H4–H6
+    поведение то же, что после H2 и H3: обычный абзац, таблиц нет."""
+    doc = _doc(f"# Заголовок\n\n{hashes} Подзаголовок\n\nПервый абзац.",
+               tmp_path, f"intro{len(hashes)}.docx")
+    assert doc.tables == []
+    assert "Первый абзац." in [p.text for p in doc.paragraphs]
