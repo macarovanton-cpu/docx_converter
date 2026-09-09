@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Pt
 
 from convert import convert_md_to_docx
 
@@ -236,3 +237,314 @@ def test_inline_missing_image_matches_block_placeholder(tmp_path):
     block = _text("![](missing_inline.png)", tmp_path)
     assert "(изображение не найдено: missing_inline.png)" in inline
     assert block.strip() and block.strip() in inline
+
+
+# =============================================================================
+# ПРАВКА #40: заголовки H4–H6
+# =============================================================================
+
+def _doc(md, tmp_path, name="doc.docx"):
+    out = tmp_path / name
+    convert_md_to_docx(md, str(out))
+    return Document(str(out))
+
+
+@pytest.mark.parametrize("hashes", ["####", "#####", "######"])
+def test_h4_h6_render_as_heading_not_literal_hashes(hashes, tmp_path):
+    """H4–H6 — настоящий заголовок: решётки не попадают в текст, оформление
+    одинаковое (PT Sans Narrow 12pt bold, TEXT_DARK, без подчёркиваний)."""
+    doc = _doc(f"{hashes} Заголовок уровня\n\nТело абзаца.", tmp_path,
+               f"h{len(hashes)}.docx")
+    head = doc.paragraphs[0]
+    assert head.text == "Заголовок уровня"
+    assert "#" not in head.text
+    run = head.runs[0]
+    assert run.bold
+    assert run.font.name == "PT Sans Narrow"
+    assert run.font.size == Pt(12)
+    assert str(run.font.color.rgb) == "1A1A1A"
+    assert head._p.find(qn('w:pPr')).find(qn('w:pBdr')) is None
+
+
+def test_h4_space_before_is_smaller_than_h3(tmp_path):
+    h3 = _doc("### Три\n\nТело.", tmp_path, "h3.docx").paragraphs[0]
+    h4 = _doc("#### Четыре\n\nТело.", tmp_path, "h4b.docx").paragraphs[0]
+    assert h4.paragraph_format.space_before < h3.paragraph_format.space_before
+
+
+@pytest.mark.parametrize("hashes", ["####", "#####", "######"])
+def test_intro_band_does_not_fire_after_h4_h6(hashes, tmp_path):
+    """ПРАВКА #12: интро-полоса — только сразу после H1. После H4–H6
+    поведение то же, что после H2 и H3: обычный абзац, таблиц нет."""
+    doc = _doc(f"# Заголовок\n\n{hashes} Подзаголовок\n\nПервый абзац.",
+               tmp_path, f"intro{len(hashes)}.docx")
+    assert doc.tables == []
+    assert "Первый абзац." in [p.text for p in doc.paragraphs]
+
+
+# =============================================================================
+# ПРАВКА #41: 📷 — метка плейсхолдера только в начале абзаца
+# =============================================================================
+
+def _photo_band(paragraph):
+    """(есть оранжевая левая полоса, заливка) — признаки блока-плейсхолдера."""
+    pPr = paragraph._p.find(qn('w:pPr'))
+    if pPr is None:
+        return False, None
+    pBdr = pPr.find(qn('w:pBdr'))
+    left = None if pBdr is None else pBdr.find(qn('w:left'))
+    shd = pPr.find(qn('w:shd'))
+    return (left is not None and left.get(qn('w:color')) == "EF7F1A",
+            None if shd is None else shd.get(qn('w:fill')))
+
+
+def test_emoji_in_mid_sentence_is_not_a_photo_placeholder(tmp_path):
+    doc = _doc("В этом абзаце эмодзи 📷 стоит в середине предложения.",
+               tmp_path, "mid.docx")
+    assert _photo_band(doc.paragraphs[0]) == (False, None)
+
+
+def test_emoji_at_paragraph_start_still_is_a_photo_placeholder(tmp_path):
+    doc = _doc("📷 Место для фотографии весов на объекте", tmp_path,
+               "start.docx")
+    assert _photo_band(doc.paragraphs[0]) == (True, "FFF8F0")
+
+
+# =============================================================================
+# ПРАВКА #42: жирная подпись «**С уважением,**»
+# =============================================================================
+
+@pytest.mark.parametrize("md", [
+    "С уважением,\nТестировщик",
+    "*С уважением,*\n*Тестировщик*",
+    "**С уважением,**\n**Тестировщик**",
+])
+def test_signature_block_recognised_with_any_asterisks(md, tmp_path):
+    """Подпись — красная линия сверху и keepLines на всём блоке."""
+    doc = _doc(md, tmp_path, f"sig{len(md)}.docx")
+    pPr = doc.paragraphs[0]._p.find(qn('w:pPr'))
+    top = pPr.find(qn('w:pBdr')).find(qn('w:top'))
+    assert top.get(qn('w:color')) == "D04514"
+    assert pPr.find(qn('w:keepLines')) is not None
+
+
+# =============================================================================
+# ПРАВКА #43: нет пустого абзаца перед первым заголовком
+# =============================================================================
+
+TEMPLATE = Path(__file__).resolve().parents[1] / "template.docx"
+needs_template = pytest.mark.skipif(
+    not TEMPLATE.exists(),
+    reason="template.docx лежит на Google Drive и в репозиторий не входит")
+
+
+@needs_template
+def test_no_empty_paragraph_before_first_heading(tmp_path):
+    """clear_body больше не вставляет пустой w:p — H1 идёт первым абзацем
+    тела и над ним только его собственный отступ 24pt."""
+    out = tmp_path / "tpl.docx"
+    convert_md_to_docx("# Заголовок\n\nТекст абзаца.", str(out),
+                       template_path=str(TEMPLATE))
+    doc = Document(str(out))
+    assert doc.paragraphs[0].text == "Заголовок"
+
+
+# =============================================================================
+# ПРАВКА #44: второй нумерованный список начинается с единицы
+# =============================================================================
+
+def _num_ids(doc):
+    """numId каждого абзаца по порядку; None — абзац вне списка."""
+    ids = []
+    for p in doc.paragraphs:
+        pPr = p._p.find(qn('w:pPr'))
+        numPr = None if pPr is None else pPr.find(qn('w:numPr'))
+        ids.append(None if numPr is None
+                   else numPr.find(qn('w:numId')).get(qn('w:val')))
+    return ids
+
+
+def _restarted_num_ids(doc):
+    """numId, у которых в numbering.xml есть startOverride=1."""
+    numbering = doc.part.numbering_part.element
+    return {n.get(qn('w:numId')) for n in numbering.findall(qn('w:num'))
+            if n.find(qn('w:lvlOverride')) is not None}
+
+
+def test_second_numbered_list_restarts_after_blank_line_only(tmp_path):
+    """Два списка подряд через одну пустую строку — разные numId с рестартом."""
+    doc = _doc("1. Первый\n2. Второй\n\n1. Снова первый\n2. Снова второй",
+               tmp_path, "two_lists.docx")
+    ids = [i for i in _num_ids(doc) if i is not None]
+    assert len(ids) == 4
+    assert ids[0] == ids[1] and ids[2] == ids[3]
+    assert ids[0] != ids[2]
+    assert {ids[0], ids[2]} <= _restarted_num_ids(doc)
+
+
+def test_separated_numbered_lists_still_restart(tmp_path):
+    """ПРАВКА #31 не сломана: между списками стоит абзац — сброс работает."""
+    doc = _doc("1. Первый\n2. Второй\n\nАбзац-разделитель.\n\n"
+               "1. Снова первый\n2. Снова второй", tmp_path, "sep_lists.docx")
+    ids = [i for i in _num_ids(doc) if i is not None]
+    assert ids[0] == ids[1] and ids[2] == ids[3] and ids[0] != ids[2]
+
+
+def test_single_numbered_list_keeps_one_num_id(tmp_path):
+    """Список из одного блока не разваливается на два счётчика."""
+    doc = _doc("1. Первый\n2. Второй\n3. Третий", tmp_path, "one_list.docx")
+    ids = [i for i in _num_ids(doc) if i is not None]
+    assert len(set(ids)) == 1
+
+
+# =============================================================================
+# ПРАВКА #45: строка не с «|» завершает таблицу
+# =============================================================================
+
+def test_paragraph_right_under_table_stays_a_paragraph(tmp_path):
+    """Текст сразу под таблицей без пустой строки — обычный абзац,
+    а не лишняя строка таблицы."""
+    doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |\n"
+               "Абзац сразу под таблицей.", tmp_path, "tbl_tail.docx")
+    table = doc.tables[0]
+    assert len(table.rows) == 2
+    assert [c.text for c in table.rows[1].cells] == ["1", "2"]
+    assert "Абзац сразу под таблицей." in [p.text for p in doc.paragraphs]
+
+
+def test_table_with_blank_line_after_is_unchanged(tmp_path):
+    """Обычный случай — пустая строка после таблицы — не задет."""
+    doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |\n\nСледующий абзац.",
+               tmp_path, "tbl_gap.docx")
+    assert len(doc.tables[0].rows) == 2
+    assert "Следующий абзац." in [p.text for p in doc.paragraphs]
+
+
+# =============================================================================
+# ПРАВКА #46: в tblPr ровно один w:tblLayout
+# =============================================================================
+
+def test_every_table_has_exactly_one_tbl_layout(tmp_path):
+    """table.autofit сам пишет w:tblLayout — ручной код добавлял второй.
+    Проверяются все три вида таблиц: данные, интро-врезка, callout."""
+    doc = _doc("# Заголовок\n\nВводный абзац во врезке.\n\n"
+               "!! Callout-врезка !!\n\n"
+               "| A | B |\n|---|---|\n| 1 | 2 |", tmp_path, "layout.docx")
+    assert len(doc.tables) == 3
+    for t in doc.tables:
+        layouts = t._tbl.find(qn('w:tblPr')).findall(qn('w:tblLayout'))
+        assert len(layouts) == 1
+
+
+def test_data_table_layout_is_autofit(tmp_path):
+    doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |", tmp_path, "autofit.docx")
+    layout = doc.tables[0]._tbl.find(qn('w:tblPr')).find(qn('w:tblLayout'))
+    assert layout.get(qn('w:type')) == "autofit"
+
+
+# =============================================================================
+# ПРАВКА #47: двойные звёздочки между цифрами не включают жирный
+# =============================================================================
+
+def test_double_asterisks_between_digits_survive(tmp_path):
+    runs = _runs("Габариты 2**3**4 метра.", tmp_path)
+    assert "2**3**4" in "".join(t for t, _, _ in runs)
+    assert not any(bold for _, bold, _ in runs)
+
+
+@pytest.mark.parametrize("md,word", [
+    ("**Кому:** Тестовый получатель", "Кому:"),
+    ("**Этап 1** Монтаж фундамента.", "Этап 1"),
+    ("**С уважением,**\n**Тестировщик**", "С уважением,"),
+    ("Позиция **2** в списке.", "2"),
+])
+def test_ordinary_bold_still_works(md, word, tmp_path):
+    """Обычный жирный текст правкой не задет — в том числе жирная цифра."""
+    assert (word, True, False) in _runs(md, tmp_path)
+
+
+# =============================================================================
+# ПРАВКА #48: библиотечный код ничего не печатает
+# =============================================================================
+
+def test_conversion_prints_nothing(tmp_path, capsys):
+    """Эмодзи в stdout роняли конвертацию на cp1251-консоли Windows."""
+    convert_md_to_docx("# Заголовок\n\nАбзац.", str(tmp_path / "quiet.docx"))
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+@needs_template
+def test_conversion_with_template_prints_nothing(tmp_path, capsys):
+    convert_md_to_docx("# Заголовок\n\nАбзац.", str(tmp_path / "quiet_tpl.docx"),
+                       template_path=str(TEMPLATE))
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+# =============================================================================
+# ПРАВКА #49: cantSplit стоит раньше tblHeader
+# =============================================================================
+
+def test_cant_split_precedes_tbl_header_in_first_row(table):
+    """В шапке оба флага, и cantSplit идёт первым — так их ждёт схема OOXML."""
+    trPr = table.rows[0]._tr.find(qn('w:trPr'))
+    tags = [c.tag.split('}')[-1] for c in trPr]
+    assert tags.index('cantSplit') < tags.index('tblHeader')
+
+
+# =============================================================================
+# ПРАВКА #50: порядок дочерних элементов OXML
+# =============================================================================
+
+# Порядок из схемы OOXML для тех контейнеров, в которые convert.py кладёт
+# элементы вручную. Перечислены только реально используемые элементы —
+# проверяется относительный порядок, а не полнота.
+SCHEMA_ORDER = {
+    'tcPr':      ['tcW', 'tcBorders', 'shd', 'tcMar'],
+    'pPr':       ['keepNext', 'keepLines', 'numPr', 'pBdr', 'shd',
+                  'spacing', 'ind', 'jc'],
+    'tblPr':     ['tblW', 'tblCellSpacing', 'tblLayout', 'tblLook'],
+    'numbering': ['abstractNum', 'num'],
+    'settings':  ['zoom', 'autoHyphenation', 'doNotHyphenateCaps'],
+    # ПРАВКА #51: стороны и внутри tcMar/tcBorders идут по схеме,
+    # а в rPr подчёркивание — после размера шрифта
+    'tcMar':     ['top', 'left', 'bottom', 'right'],
+    'tcBorders': ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'],
+    'rPr':       ['rFonts', 'b', 'i', 'color', 'sz', 'szCs', 'u'],
+}
+
+
+def _out_of_order(root):
+    """[(контейнер, порядок детей), ...] — всё, что нарушает схему."""
+    bad = []
+    for el in root.iter():
+        order = SCHEMA_ORDER.get(el.tag.split('}')[-1])
+        if order is None:
+            continue
+        kids = [k.tag.split('}')[-1] for k in el
+                if isinstance(k.tag, str) and k.tag.split('}')[-1] in order]
+        idx = [order.index(k) for k in kids]
+        if idx != sorted(idx):
+            bad.append((el.tag.split('}')[-1], kids))
+    return bad
+
+
+# В test_formatting.md интро-полосы нет намеренно (после H1 идёт блок
+# реквизитов), поэтому её tcBorders добирается отдельным документом.
+INTRO_MD = "# Заголовок\n\nВводный абзац во врезке с левой полосой."
+
+
+@pytest.mark.parametrize("source", ["test_formatting.md", "intro"])
+def test_oxml_children_follow_schema_order(source, tmp_path):
+    """В document.xml, numbering.xml и settings.xml дочерние элементы идут
+    в порядке, заданном схемой OOXML."""
+    md = (INTRO_MD if source == "intro" else
+          (Path(__file__).resolve().parents[1] / source).read_text(
+              encoding='utf-8'))
+    out = tmp_path / f"order_{source}.docx"
+    convert_md_to_docx(md, str(out))
+    doc = Document(str(out))
+    parts = [doc.element.body, doc.part.numbering_part.element,
+             doc.settings.element]
+    assert [bad for part in parts for bad in _out_of_order(part)] == []

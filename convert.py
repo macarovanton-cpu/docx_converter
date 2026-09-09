@@ -42,14 +42,75 @@ CONTENT_WIDTH_CM = 17.5
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =============================================================================
 
+# ПРАВКА #50: порядок дочерних элементов в OXML задаёт схема, а не порядок
+# вызовов: append ставил shd/tcMar/tcBorders после tcW, keepNext после jc и так
+# далее. python-docx знает эти последовательности, но удаляет их из своих
+# классов (`del _tag_seq`), поэтому нужные держим здесь.
+# Для settings перечислен только хвост от autoHyphenation — других элементов
+# этот файл в settings.xml не вставляет.
+_CHILD_ORDER = {
+    'pPr': (
+        'pStyle keepNext keepLines pageBreakBefore framePr widowControl numPr '
+        'suppressLineNumbers pBdr shd tabs suppressAutoHyphens kinsoku wordWrap '
+        'overflowPunct topLinePunct autoSpaceDE autoSpaceDN bidi adjustRightInd '
+        'snapToGrid spacing ind contextualSpacing mirrorIndents suppressOverlap '
+        'jc textDirection textAlignment textboxTightWrap outlineLvl divId '
+        'cnfStyle rPr sectPr pPrChange').split(),
+    'tcPr': (
+        'cnfStyle tcW gridSpan hMerge vMerge tcBorders shd noWrap tcMar '
+        'textDirection tcFitText vAlign hideMark headers cellIns cellDel '
+        'cellMerge tcPrChange').split(),
+    'tblPr': (
+        'tblStyle tblpPr tblOverlap bidiVisual tblStyleRowBandSize '
+        'tblStyleColBandSize tblW jc tblCellSpacing tblInd tblBorders shd '
+        'tblLayout tblCellMar tblLook tblCaption tblDescription '
+        'tblPrChange').split(),
+    'numbering': 'numPicBullet abstractNum num numIdMacAtCleanup'.split(),
+    'settings': (
+        'autoHyphenation consecutiveHyphenLimit hyphenationZone '
+        'doNotHyphenateCaps showEnvelope summaryLength clickAndTypeStyle '
+        'defaultTableStyle evenAndOddHeaders bookFoldRevPrinting '
+        'bookFoldPrinting bookFoldPrintingSheets drawingGridHorizontalSpacing '
+        'drawingGridVerticalSpacing displayHorizontalDrawingGridEvery '
+        'displayVerticalDrawingGridEvery doNotUseMarginsForDrawingGridOrigin '
+        'drawingGridHorizontalOrigin drawingGridVerticalOrigin '
+        'doNotShadeFormData noPunctuationKerning characterSpacingControl '
+        'printTwoOnOne strictFirstAndLastChars noLineBreaksAfter '
+        'noLineBreaksBefore savePreviewPicture doNotValidateAgainstSchema '
+        'saveInvalidXml ignoreMixedContent alwaysShowPlaceholderText '
+        'doNotDemarcateInvalidXml saveXmlDataOnly useXSLTWhenSaving '
+        'saveThroughXslt showXMLTags alwaysMergeEmptyNamespace updateFields '
+        'hdrShapeDefaults footnotePr endnotePr compat docVars rsids mathPr '
+        'attachedSchema themeFontLang clrSchemeMapping '
+        'doNotIncludeSubdocsInStats doNotAutoCompressPictures forceUpgrade '
+        'captions readModeInkLockDown smartTagType shapeDefaults '
+        'doNotEmbedSmartTags decimalSymbol listSeparator').split(),
+}
+
+
+def insert_in_order(parent, child):
+    """ПРАВКА #50: ставит элемент туда, где его ждёт схема OOXML.
+    Родитель или тег без известного порядка — фолбэк на append (как до #50),
+    чтобы будущие вызовы с непокрытыми тегами не падали."""
+    order = _CHILD_ORDER.get(parent.tag.split('}')[-1])
+    tag = child.tag.split('}')[-1]
+    if order is None or tag not in order:
+        parent.append(child)
+        return child
+    successors = order[order.index(tag) + 1:]
+    return parent.insert_element_before(child, *('w:' + s for s in successors))
+
+
 def clear_body(doc):
     """Удаляет всё содержимое тела, сохраняя финальный sectPr."""
     body = doc.element.body
     to_remove = [c for c in body
                  if (c.tag.split('}')[-1] if '}' in c.tag else c.tag) != 'sectPr']
+    # ПРАВКА #43: пустой w:p здесь не нужен — python-docx сам вставляет
+    # абзацы перед sectPr, а лишний давал провал над первым заголовком
+    # в дополнение к его собственному отступу 24pt.
     for el in to_remove:
         body.remove(el)
-    body.insert(0, OxmlElement('w:p'))
 
 
 def set_cell_shading(cell, hex_color):
@@ -58,19 +119,20 @@ def set_cell_shading(cell, hex_color):
     shd = OxmlElement('w:shd')
     shd.set(qn('w:fill'), hex_color)
     shd.set(qn('w:val'), 'clear')
-    tcPr.append(shd)
+    insert_in_order(tcPr, shd)
 
 
 def set_cell_margins_and_borders(cell, hex_color, sz):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcMar = OxmlElement('w:tcMar')
-    for side, w in [('top','100'),('bottom','100'),('left','160'),('right','160')]:
+    # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+    for side, w in [('top','100'),('left','160'),('bottom','100'),('right','160')]:
         node = OxmlElement(f'w:{side}')
         node.set(qn('w:w'), w)
         node.set(qn('w:type'), 'dxa')
         tcMar.append(node)
-    tcPr.append(tcMar)
+    insert_in_order(tcPr, tcMar)
     tcBorders = OxmlElement('w:tcBorders')
     for side in ['top','left','bottom','right']:
         bdr = OxmlElement(f'w:{side}')
@@ -78,7 +140,7 @@ def set_cell_margins_and_borders(cell, hex_color, sz):
         bdr.set(qn('w:sz'), str(sz))
         bdr.set(qn('w:color'), hex_color)
         tcBorders.append(bdr)
-    tcPr.append(tcBorders)
+    insert_in_order(tcPr, tcBorders)
 
 
 def set_cell_no_borders(cell):
@@ -92,7 +154,7 @@ def set_cell_no_borders(cell):
         bdr.set(qn('w:sz'), '0')
         bdr.set(qn('w:color'), 'auto')
         tcBorders.append(bdr)
-    tcPr.append(tcBorders)
+    insert_in_order(tcPr, tcBorders)
 
 
 def add_paragraph_border(paragraph, side, color, size, space="0"):
@@ -100,7 +162,7 @@ def add_paragraph_border(paragraph, side, color, size, space="0"):
     pBdr = pPr.find(qn('w:pBdr'))
     if pBdr is None:
         pBdr = OxmlElement('w:pBdr')
-        pPr.append(pBdr)
+        insert_in_order(pPr, pBdr)
     border = OxmlElement(f'w:{side}')
     border.set(qn('w:val'), 'single')
     border.set(qn('w:sz'), str(size))
@@ -114,7 +176,7 @@ def add_paragraph_shading(paragraph, hex_color):
     shd = OxmlElement('w:shd')
     shd.set(qn('w:fill'), hex_color)
     shd.set(qn('w:val'), 'clear')
-    pPr.append(shd)
+    insert_in_order(pPr, shd)
 
 
 def set_table_width_dxa(table, width_cm):
@@ -131,7 +193,7 @@ def set_table_width_dxa(table, width_cm):
     tblW = OxmlElement('w:tblW')
     tblW.set(qn('w:w'), str(dxa))
     tblW.set(qn('w:type'), 'dxa')
-    tblPr.append(tblW)
+    insert_in_order(tblPr, tblW)
 
 
 def set_table_no_spacing(table):
@@ -144,7 +206,7 @@ def set_table_no_spacing(table):
     spacing = OxmlElement('w:tblCellSpacing')
     spacing.set(qn('w:w'), '0')
     spacing.set(qn('w:type'), 'dxa')
-    tblPr.append(spacing)
+    insert_in_order(tblPr, spacing)
 
 
 def set_row_height(row, height_dxa):
@@ -172,14 +234,14 @@ def set_keep_with_next(paragraph):
     """Параграф остаётся на той же странице что и следующий."""
     pPr = paragraph._p.get_or_add_pPr()
     kwn = OxmlElement('w:keepNext')
-    pPr.append(kwn)
+    insert_in_order(pPr, kwn)
 
 
 def set_keep_together(paragraph):
     """Не разрывает параграф по страницам."""
     pPr = paragraph._p.get_or_add_pPr()
     kt = OxmlElement('w:keepLines')
-    pPr.append(kt)
+    insert_in_order(pPr, kt)
 
 
 def set_run_font(run, name, size_pt, color_hex, bold=False, italic=False):
@@ -207,27 +269,29 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
     hyperlink = OxmlElement('w:hyperlink')
     hyperlink.set(qn('r:id'), r_id)
     run_el = OxmlElement('w:r')
+    # ПРАВКА #51: порядок детей rPr задан CT_RPr —
+    # rFonts, b, i, color, sz, szCs, u. Раньше u стоял перед sz и szCs.
     rPr = OxmlElement('w:rPr')
     rFonts = OxmlElement('w:rFonts')
     rFonts.set(qn('w:ascii'), font_name)
     rFonts.set(qn('w:hAnsi'), font_name)
     rPr.append(rFonts)
+    if bold:
+        rPr.append(OxmlElement('w:b'))
+    if italic:
+        rPr.append(OxmlElement('w:i'))
     color_el = OxmlElement('w:color')
     color_el.set(qn('w:val'), BRAND_BLUE)
     rPr.append(color_el)
-    u = OxmlElement('w:u')
-    u.set(qn('w:val'), 'single')
-    rPr.append(u)
     sz = OxmlElement('w:sz')
     sz.set(qn('w:val'), str(font_size * 2))
     rPr.append(sz)
     szCs = OxmlElement('w:szCs')
     szCs.set(qn('w:val'), str(font_size * 2))
     rPr.append(szCs)
-    if bold:
-        rPr.append(OxmlElement('w:b'))
-    if italic:
-        rPr.append(OxmlElement('w:i'))
+    u = OxmlElement('w:u')
+    u.set(qn('w:val'), 'single')
+    rPr.append(u)
     run_el.append(rPr)
     t = OxmlElement('w:t')
     t.set(qn('xml:space'), 'preserve')
@@ -258,7 +322,10 @@ def is_stage_paragraph(text):
     return bool(re.match(r'^\*\*(Стадия|Фаза|Шаг|Этап|ВАЖНО)', text, re.IGNORECASE))
 
 def is_photo_placeholder(text):
-    return '📷' in text or '[Место для фото' in text
+    # ПРАВКА #41: эмодзи — метка плейсхолдера только в начале абзаца. Проверка
+    # «📷 in text» по всему абзацу красила оранжевой полосой любой обычный
+    # абзац, где эмодзи стоит в середине предложения.
+    return text.lstrip().startswith('📷') or '[Место для фото' in text
 
 # ПРАВКА #23: блок-картинка ![alt](src)
 _IMG_BLOCK_RE = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
@@ -277,7 +344,8 @@ def is_requisites_block(text):
     return bool(re.match(r'^\*\*(Кому|От кого|Кому:|От кого:)', text))
 
 def is_signature_block(text):
-    return bool(re.match(r'^\*?С уважением', text))
+    # ПРАВКА #42: ^\** вместо ^\*? — одна звёздочка не покрывала «**С уважением,**»
+    return bool(re.match(r'^\**С уважением', text))
 
 def is_callout_block(text):
     """Блок !! текст !! — callout-врезка."""
@@ -317,7 +385,9 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
     # молча пропадает из документа вместо буквального вывода.
     pattern = re.compile(
         r'(\*\*\*(?!\s)[^*\n]+?(?<!\s)\*\*\*'
-        r'|\*\*(?!\s)[^*\n]+?(?<!\s)\*\*'
+        # ПРАВКА #47: ограничение на цифры из #36 было только у одиночной
+        # звёздочки, поэтому «2**3**4» давало жирную тройку.
+        r'|(?:(?<!\d)\*\*|\*\*(?!\d))(?!\s)[^*\n]+?(?<!\s)\*\*'
         r'|(?:(?<!\d)\*|\*(?!\d))(?!\*)(?!\s)[^*\n]+?(?<![\s*])\*(?!\*))')
     parts = pattern.split(text)
     for part in parts:
@@ -450,7 +520,7 @@ def add_intro_paragraph(doc, block, content_width_cm):
     Выглядит как акцентный callout для главной мысли документа.
     """
     table = doc.add_table(rows=1, cols=1)
-    table.autofit = table.allow_autofit = False
+    table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
     set_table_no_spacing(table)
 
@@ -460,28 +530,31 @@ def add_intro_paragraph(doc, block, content_width_cm):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBorders = OxmlElement('w:tcBorders')
-    for side in ['top', 'bottom', 'right']:
+    # ПРАВКА #51: порядок сторон задан схемой — левая граница не может
+    # дописываться последней, её место между top и bottom
+    for side in ['top', 'left', 'bottom', 'right']:
         bdr = OxmlElement(f'w:{side}')
-        bdr.set(qn('w:val'), 'none')
-        bdr.set(qn('w:sz'), '0')
-        bdr.set(qn('w:color'), 'auto')
+        if side == 'left':
+            bdr.set(qn('w:val'), 'single')
+            bdr.set(qn('w:sz'), '18')   # ~2.25pt
+            bdr.set(qn('w:space'), '4')
+            bdr.set(qn('w:color'), BRAND_BLUE)
+        else:
+            bdr.set(qn('w:val'), 'none')
+            bdr.set(qn('w:sz'), '0')
+            bdr.set(qn('w:color'), 'auto')
         tcBorders.append(bdr)
-    left_bdr = OxmlElement('w:left')
-    left_bdr.set(qn('w:val'), 'single')
-    left_bdr.set(qn('w:sz'), '18')   # ~2.25pt
-    left_bdr.set(qn('w:space'), '4')
-    left_bdr.set(qn('w:color'), BRAND_BLUE)
-    tcBorders.append(left_bdr)
-    tcPr.append(tcBorders)
+    insert_in_order(tcPr, tcBorders)
 
     # Внутренние отступы ячейки
     tcMar = OxmlElement('w:tcMar')
-    for side, w in [('top','80'),('bottom','80'),('left','220'),('right','0')]:
+    # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+    for side, w in [('top','80'),('left','220'),('bottom','80'),('right','0')]:
         node = OxmlElement(f'w:{side}')
         node.set(qn('w:w'), w)
         node.set(qn('w:type'), 'dxa')
         tcMar.append(node)
-    tcPr.append(tcMar)
+    insert_in_order(tcPr, tcMar)
 
     p = cell.paragraphs[0]
     p.paragraph_format.alignment  = WD_ALIGN_PARAGRAPH.LEFT  # ПРАВКА #27
@@ -505,7 +578,7 @@ def add_callout_box(doc, text, content_width_cm):
     """
     clean = text.strip('!').strip()
     table = doc.add_table(rows=1, cols=1)
-    table.autofit = table.allow_autofit = False
+    table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
 
     cell = table.rows[0].cells[0]
@@ -521,15 +594,16 @@ def add_callout_box(doc, text, content_width_cm):
         bdr.set(qn('w:color'), 'C5D8EC')
         tcBorders.append(bdr)
     # Акцент — левая граница чуть толще
-    tcPr.append(tcBorders)
+    insert_in_order(tcPr, tcBorders)
 
     tcMar = OxmlElement('w:tcMar')
-    for side, w in [('top','140'),('bottom','140'),('left','220'),('right','220')]:
+    # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+    for side, w in [('top','140'),('left','220'),('bottom','140'),('right','220')]:
         node = OxmlElement(f'w:{side}')
         node.set(qn('w:w'), w)
         node.set(qn('w:type'), 'dxa')
         tcMar.append(node)
-    tcPr.append(tcMar)
+    insert_in_order(tcPr, tcMar)
 
     p = cell.paragraphs[0]
     p.paragraph_format.alignment  = WD_ALIGN_PARAGRAPH.LEFT
@@ -549,7 +623,7 @@ def add_compact_spacer(doc):
     s.set(qn('w:after'), '120')
     s.set(qn('w:line'), '120')
     s.set(qn('w:lineRule'), 'exact')
-    pPr.append(s)
+    insert_in_order(pPr, s)
 
 
 def add_table_cell_content(p, text, font_size=10):
@@ -589,10 +663,8 @@ def enable_auto_hyphenation(doc):
     existing = settings.find(qn('w:autoHyphenation'))
     if existing is not None:
         settings.remove(existing)
-    auto_hyphen = OxmlElement('w:autoHyphenation')
-    settings.insert(0, auto_hyphen)
-    do_not_hyphen_caps = OxmlElement('w:doNotHyphenateCaps')
-    settings.insert(1, do_not_hyphen_caps)
+    insert_in_order(settings, OxmlElement('w:autoHyphenation'))
+    insert_in_order(settings, OxmlElement('w:doNotHyphenateCaps'))
 
 
 # =============================================================================
@@ -678,7 +750,7 @@ def ensure_list_numbering(doc):
         rPr.append(rFonts)
         lvl.append(rPr)
         abstract_bullet.append(lvl)
-        numbering_elem.append(abstract_bullet)
+        insert_in_order(numbering_elem, abstract_bullet)
 
     # --- Numbered abstractNum ---
     if NUMBERED_ABSTRACT_ID not in existing_abstract:
@@ -705,7 +777,7 @@ def ensure_list_numbering(doc):
         pPr.append(ind)
         lvl.append(pPr)
         abstract_num.append(lvl)
-        numbering_elem.append(abstract_num)
+        insert_in_order(numbering_elem, abstract_num)
 
     # --- num элементы (ссылки на abstractNum) ---
     existing_num = {
@@ -718,7 +790,7 @@ def ensure_list_numbering(doc):
         abstract_ref = OxmlElement('w:abstractNumId')
         abstract_ref.set(qn('w:val'), str(BULLET_ABSTRACT_ID))
         num_bullet.append(abstract_ref)
-        numbering_elem.append(num_bullet)
+        insert_in_order(numbering_elem, num_bullet)
 
     if NUMBERED_NUM_ID not in existing_num:
         num_numbered = OxmlElement('w:num')
@@ -726,7 +798,7 @@ def ensure_list_numbering(doc):
         abstract_ref = OxmlElement('w:abstractNumId')
         abstract_ref.set(qn('w:val'), str(NUMBERED_ABSTRACT_ID))
         num_numbered.append(abstract_ref)
-        numbering_elem.append(num_numbered)
+        insert_in_order(numbering_elem, num_numbered)
 
     return BULLET_NUM_ID, NUMBERED_NUM_ID
 
@@ -752,7 +824,7 @@ def new_numbered_num_id(doc):
     start_override.set(qn('w:val'), '1')
     override.append(start_override)
     num.append(override)
-    numbering_elem.append(num)
+    insert_in_order(numbering_elem, num)
     return num_id
 
 
@@ -766,7 +838,7 @@ def set_paragraph_numbering(paragraph, num_id, ilvl=0):
     numId_el.set(qn('w:val'), str(num_id))
     numPr.append(ilvl_el)
     numPr.append(numId_el)
-    pPr.append(numPr)
+    insert_in_order(pPr, numPr)
 
 
 # =============================================================================
@@ -783,7 +855,6 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         doc = Document(template_path)
         clear_body(doc)
         content_width_cm = CONTENT_WIDTH_CM
-        print(f"  Шаблон: {template_path}")
     else:
         doc = Document()
         section = doc.sections[0]
@@ -794,7 +865,6 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         section.top_margin    = Cm(2.54)
         section.bottom_margin = Cm(2.54)
         content_width_cm = 21.0 - 2.54 * 2
-        print("  ⚠️  Шаблон не найден — хедер не будет добавлен")
 
         footer   = doc.sections[0].footer
         footer_p = footer.paragraphs[0]
@@ -839,6 +909,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         flags=re.MULTILINE,
     )
 
+    # ПРАВКА #45: строка, не начинающаяся с «|», завершает таблицу. Без пустой
+    # строки перед ним абзац под таблицей всасывался лишней строкой таблицы.
+    md_text = re.sub(r'^(\|.*)\n(?=[^|\n])', r'\1\n\n', md_text,
+                     flags=re.MULTILINE)
+
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
 
@@ -862,6 +937,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         if not is_list_item:
             # ПРАВКА #31: любой не-списочный блок завершает текущий
             # нумерованный список — следующий начнётся с 1
+            current_numbered_num_id = None
+        elif re.match(r'^1\. ', block):
+            # ПРАВКА #44: два списка, разделённые только пустой строкой, делили
+            # один numId и второй продолжал нумерацию первого («3, 4» вместо
+            # «1, 2»). Блок, начинающийся с «1. », открывает новый список.
             current_numbered_num_id = None
         if not is_list_item and last_list_paragraph:
             last_list_paragraph.paragraph_format.space_after = Pt(10)
@@ -913,6 +993,21 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             parse_inline_markdown(p, block[4:], 'PT Sans Narrow', 13, TEXT_DARK)
             for r in p.runs: r.bold = True
             # ПРАВКА #14: H3 не отрывается от контента ниже
+            set_keep_with_next(p)
+            after_heading = True
+
+        # ── H4–H6 ────────────────────────────────────────────────────────────
+        elif re.match(r'^#{4,6} ', block):
+            pending_intro_after_h1 = False   # ПРАВКА #12
+            p = doc.add_paragraph()
+            p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.space_before = Pt(10)   # меньше, чем у H3 (14pt)
+            p.paragraph_format.space_after  = Pt(4)
+            # ПРАВКА #40: H5 и H6 оформляются как H4 — в деловых документах
+            # глубже четвёртого уровня не ходят. Без декоративных линий.
+            parse_inline_markdown(p, re.sub(r'^#{4,6} ', '', block),
+                                  'PT Sans Narrow', 12, TEXT_DARK)
+            for r in p.runs: r.bold = True
             set_keep_with_next(p)
             after_heading = True
 
@@ -1024,14 +1119,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             n_cols   = len(headers)
             table    = doc.add_table(rows=1, cols=n_cols)
             # ПРАВКА #16: autofit для распределения ширин по содержимому
+            # ПРАВКА #46: table.autofit сам пишет w:tblLayout — ручной код
+            # добавлял второй такой же элемент в каждую таблицу.
             table.autofit = True
-            table.allow_autofit = True
             set_table_width_dxa(table, content_width_cm)
-            # tblLayout=auto чтобы Word распределял ширины колонок
-            tblPr = table._tbl.find(qn('w:tblPr'))
-            tblLayout = OxmlElement('w:tblLayout')
-            tblLayout.set(qn('w:type'), 'autofit')
-            tblPr.append(tblLayout)
 
             # ПРАВКА #7: заголовочная строка — увеличена высота и шрифт
             set_row_height(table.rows[0], 560)   # ~1cm минимальная высота
@@ -1050,7 +1141,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                         tcW = OxmlElement('w:tcW')
                         tcW.set(qn('w:w'), str(int(6.0 * 567)))
                         tcW.set(qn('w:type'), 'dxa')
-                        tcPr_w.append(tcW)
+                        insert_in_order(tcPr_w, tcW)
                     p = cell.paragraphs[0]
                     p.paragraph_format.alignment   = WD_ALIGN_PARAGRAPH.CENTER
                     p.paragraph_format.space_after = Pt(0)
@@ -1091,7 +1182,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                             tcW = OxmlElement('w:tcW')
                             tcW.set(qn('w:w'), str(int(6.0 * 567)))
                             tcW.set(qn('w:type'), 'dxa')
-                            tcPr_w.append(tcW)
+                            insert_in_order(tcPr_w, tcW)
                         p = cell.paragraphs[0]
                         p.paragraph_format.space_after = Pt(0)
                         # ПРАВКА #8: автоматические ✓/✗ для Да/Нет/Отсутствует
@@ -1099,9 +1190,12 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
             # ПРАВКА #35: шапка повторяется на каждой странице,
             # строка не разрывается пополам между страницами
-            set_row_flag(table.rows[0], 'w:tblHeader')
+            # ПРАВКА #49: порядок выровнен для единообразия с остальными
+            # элементами (CT_TrPrBase — xsd:choice maxOccurs="unbounded",
+            # схема порядок внутри trPr не регламентирует)
             for row in table.rows:
                 set_row_flag(row, 'w:cantSplit')
+            set_row_flag(table.rows[0], 'w:tblHeader')
 
             # Компактный отступ после таблицы
             sp = doc.add_paragraph()
@@ -1111,7 +1205,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             s.set(qn('w:after'), '120')
             s.set(qn('w:line'), '120')
             s.set(qn('w:lineRule'), 'exact')
-            pPr.append(s)
+            insert_in_order(pPr, s)
             after_heading = False
 
         # ── Разделители --- ───────────────────────────────────────────────────
@@ -1173,7 +1267,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 s.set(qn('w:after'), '120')
                 s.set(qn('w:line'), '120')
                 s.set(qn('w:lineRule'), 'exact')
-                pPr.append(s)
+                insert_in_order(pPr, s)
                 continue
 
             p = doc.add_paragraph()
@@ -1196,8 +1290,9 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 p.paragraph_format.space_after = Pt(2)
             after_heading = False
 
+    # ПРАВКА #48: библиотечный код ничего не печатает. Эмодзи в stdout роняли
+    # конвертацию на cp1251-консоли Windows — костыль с -X utf8 больше не нужен.
     doc.save(output_filename)
-    print(f"✅ Готово! Файл сохранён: {output_filename}")
 
 
 # =============================================================================
