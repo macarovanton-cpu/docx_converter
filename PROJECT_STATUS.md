@@ -1,6 +1,6 @@
 # docx_converter Project Status
 
-Last updated: 2026-07-08
+Last updated: 2026-09-10
 
 ## Current State
 
@@ -31,7 +31,11 @@ Current import capability:
   OCR cleanup rules only and not connected to the UI or conversion flow;
 - oversized page range protection;
 - UI validation for page ranges;
-- temporary file cleanup.
+- temporary file cleanup;
+- provider-agnostic PDF-to-Markdown core in `pdf_core.py`
+  (`pdf_to_markdown` / `pdf_to_markdown_with_status`), which `app.py` now
+  calls instead of driving `analyze_pdf_pages` / `ocr_auto_mode` directly;
+  covered by `tests/test_pdf_core.py`.
 
 The `feature/markitdown-import` PR has been merged into `main`.
 
@@ -44,6 +48,18 @@ binaries are unavailable. This is an open question to be resolved by a separate
 packaging task, consistent with "Do not add OCR to the main requirements.txt
 without a packaging decision" below.
 
+## Known Test Gap
+
+Five of the six tests in `tests/test_pdf_core.py` fail with
+`ModuleNotFoundError` when `pypdf` and `markitdown` are not installed in the
+environment running `pytest` (both are listed in `requirements.txt`, but a
+plain interpreter without a full `pip install -r requirements.txt` will not
+have them — the project's `.venv` does). Only
+`PdfCoreProviderTests::test_ocrmypdf_provider_pipeline_and_temp_cleanup`
+survives, since it does not touch `analyze_pdf_pages`/MarkItDown. This is an
+open, unclosed task — not yet decided whether the fix is documenting the
+`.venv` requirement, adding a `pytest` marker/skip, or something else.
+
 ## Current Phase
 
 Backend-only deterministic cleanup de-overfit for OCR Markdown. The cleanup is
@@ -51,7 +67,7 @@ not connected to the UI or existing conversion flow.
 
 ## Branch Context
 
-Current branch: `feature/ocr-cleanup-deoverfit`
+Current branch: `main`
 
 ## Next Recommended Task
 
@@ -65,7 +81,6 @@ Current branch: `feature/ocr-cleanup-deoverfit`
 - Do not add LLM cleanup.
 - Do not connect cleanup to the UI or conversion flow without a separate task.
 - Do not do a large refactor.
-- Do not change `convert.py`.
 - Do not add OCR to the main `requirements.txt` without a packaging decision.
 - Do not commit `test_files`.
 
@@ -154,9 +169,21 @@ If using `ocr_converter.py`:
 
 1. `git checkout main`
 2. `git pull`
-3. `git checkout -b feature/ocr-ui-auto`
-4. read `PROJECT_PLAN.md` `PROJECT_STATUS.md` `AGENTS.md`
-5. start with minimal plan for OCR UI auto mode
+3. Read `PROJECT_PLAN.md`, `PROJECT_STATUS.md`, `AGENTS.md`, and `CLAUDE.md` —
+   the OCR stages 1-3 in `PROJECT_PLAN.md` (backend wrapper, UI mode, raw
+   Markdown output) are done; stage 5 (tests) is only partial.
+4. `git checkout -b <feature-branch-for-the-task>`
+5. Run `pytest -v` from an environment with the full `requirements.txt`
+   installed (the project's `.venv`, not a bare interpreter — see "Known Test
+   Gap" above) to get a clean baseline before changing anything.
+6. Pick up an open item, e.g.:
+   - the OCR production packaging gap (`ocrmypdf`/Tesseract/Ghostscript not
+     in `requirements.txt`/`packages.txt` — see "Known Production
+     Limitation");
+   - the `pypdf`/`markitdown` environment gap in `tests/test_pdf_core.py`
+     (see "Known Test Gap");
+   - stage 4 of the OCR roadmap (cleanup/LLM cleanup) in `PROJECT_PLAN.md`,
+     still not connected to the UI or conversion flow.
 
 ## Recent Work Log
 
@@ -265,6 +292,5 @@ Manual-check `feature/ocr-ui-auto`:
 - do not add LLM cleanup;
 - do not add deterministic cleanup;
 - do not do a large refactor;
-- do not change `convert.py`;
 - preserve the existing Markdown to DOCX workflow;
 - preserve the existing MarkItDown import workflow.
