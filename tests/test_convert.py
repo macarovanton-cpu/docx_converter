@@ -491,3 +491,48 @@ def test_cant_split_precedes_tbl_header_in_first_row(table):
     trPr = table.rows[0]._tr.find(qn('w:trPr'))
     tags = [c.tag.split('}')[-1] for c in trPr]
     assert tags.index('cantSplit') < tags.index('tblHeader')
+
+
+# =============================================================================
+# ПРАВКА #50: порядок дочерних элементов OXML
+# =============================================================================
+
+# Порядок из схемы OOXML для тех контейнеров, в которые convert.py кладёт
+# элементы вручную. Перечислены только реально используемые элементы —
+# проверяется относительный порядок, а не полнота.
+SCHEMA_ORDER = {
+    'tcPr':      ['tcW', 'tcBorders', 'shd', 'tcMar'],
+    'pPr':       ['keepNext', 'keepLines', 'numPr', 'pBdr', 'shd',
+                  'spacing', 'ind', 'jc'],
+    'tblPr':     ['tblW', 'tblCellSpacing', 'tblLayout', 'tblLook'],
+    'numbering': ['abstractNum', 'num'],
+    'settings':  ['zoom', 'autoHyphenation', 'doNotHyphenateCaps'],
+}
+
+
+def _out_of_order(root):
+    """[(контейнер, порядок детей), ...] — всё, что нарушает схему."""
+    bad = []
+    for el in root.iter():
+        order = SCHEMA_ORDER.get(el.tag.split('}')[-1])
+        if order is None:
+            continue
+        kids = [k.tag.split('}')[-1] for k in el
+                if isinstance(k.tag, str) and k.tag.split('}')[-1] in order]
+        idx = [order.index(k) for k in kids]
+        if idx != sorted(idx):
+            bad.append((el.tag.split('}')[-1], kids))
+    return bad
+
+
+def test_oxml_children_follow_schema_order(tmp_path):
+    """Весь test_formatting.md: в document.xml, numbering.xml и settings.xml
+    дочерние элементы идут в порядке, заданном схемой OOXML."""
+    md = (Path(__file__).resolve().parents[1] / "test_formatting.md").read_text(
+        encoding='utf-8')
+    out = tmp_path / "order.docx"
+    convert_md_to_docx(md, str(out))
+    doc = Document(str(out))
+    parts = [doc.element.body, doc.part.numbering_part.element,
+             doc.settings.element]
+    assert [bad for part in parts for bad in _out_of_order(part)] == []
