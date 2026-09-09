@@ -258,7 +258,10 @@ def is_stage_paragraph(text):
     return bool(re.match(r'^\*\*(Стадия|Фаза|Шаг|Этап|ВАЖНО)', text, re.IGNORECASE))
 
 def is_photo_placeholder(text):
-    return '📷' in text or '[Место для фото' in text
+    # ПРАВКА #41: эмодзи — метка плейсхолдера только в начале абзаца. Проверка
+    # «📷 in text» по всему абзацу красила оранжевой полосой любой обычный
+    # абзац, где эмодзи стоит в середине предложения.
+    return text.lstrip().startswith('📷') or '[Место для фото' in text
 
 # ПРАВКА #23: блок-картинка ![alt](src)
 _IMG_BLOCK_RE = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')

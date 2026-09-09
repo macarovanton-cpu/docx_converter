@@ -280,3 +280,31 @@ def test_intro_band_does_not_fire_after_h4_h6(hashes, tmp_path):
                tmp_path, f"intro{len(hashes)}.docx")
     assert doc.tables == []
     assert "Первый абзац." in [p.text for p in doc.paragraphs]
+
+
+# =============================================================================
+# ПРАВКА #41: 📷 — метка плейсхолдера только в начале абзаца
+# =============================================================================
+
+def _photo_band(paragraph):
+    """(есть оранжевая левая полоса, заливка) — признаки блока-плейсхолдера."""
+    pPr = paragraph._p.find(qn('w:pPr'))
+    if pPr is None:
+        return False, None
+    pBdr = pPr.find(qn('w:pBdr'))
+    left = None if pBdr is None else pBdr.find(qn('w:left'))
+    shd = pPr.find(qn('w:shd'))
+    return (left is not None and left.get(qn('w:color')) == "EF7F1A",
+            None if shd is None else shd.get(qn('w:fill')))
+
+
+def test_emoji_in_mid_sentence_is_not_a_photo_placeholder(tmp_path):
+    doc = _doc("В этом абзаце эмодзи 📷 стоит в середине предложения.",
+               tmp_path, "mid.docx")
+    assert _photo_band(doc.paragraphs[0]) == (False, None)
+
+
+def test_emoji_at_paragraph_start_still_is_a_photo_placeholder(tmp_path):
+    doc = _doc("📷 Место для фотографии весов на объекте", tmp_path,
+               "start.docx")
+    assert _photo_band(doc.paragraphs[0]) == (True, "FFF8F0")
