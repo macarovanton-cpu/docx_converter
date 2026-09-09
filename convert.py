@@ -159,6 +159,15 @@ def set_row_height(row, height_dxa):
     trPr.append(trHeight)
 
 
+def set_row_flag(row, tag):
+    """ПРАВКА #35: булев флаг строки таблицы: 'w:tblHeader' | 'w:cantSplit'."""
+    trPr = row._tr.find(qn('w:trPr'))
+    if trPr is None:
+        trPr = OxmlElement('w:trPr')
+        row._tr.insert(0, trPr)
+    trPr.append(OxmlElement(tag))
+
+
 def set_keep_with_next(paragraph):
     """Параграф остаётся на той же странице что и следующий."""
     pPr = paragraph._p.get_or_add_pPr()
@@ -188,7 +197,7 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
                       bold=False, italic=False):
     if not url or not url.strip():
         return None
-    url = url.strip()
+    url = _unshield_escapes(url.strip())            # ПРАВКА #37
     url = re.sub(r'\\([._\-+~#?&=/])', r'\1', url)      # ПРАВКА #24: раскрытие markdown-экранирования в URL
     if not re.match(r'^https?://', url):
         url = 'https://' + url
@@ -220,7 +229,7 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
     run_el.append(rPr)
     t = OxmlElement('w:t')
     t.set(qn('xml:space'), 'preserve')
-    t.text = text
+    t.text = _unshield_escapes(text)                # ПРАВКА #37
     run_el.append(t)
     hyperlink.append(run_el)
     paragraph._p.append(hyperlink)
@@ -277,10 +286,37 @@ def is_callout_block(text):
 # INLINE MARKDOWN ПАРСЕР
 # =============================================================================
 
+# ПРАВКА #37: экранированные \* \[ \] прячутся в private use area до парсинга —
+# иначе звёздочка снова попадёт под правила курсива, а скобки соберутся в ложную
+# ссылку. Символ возвращается на месте записи в run: X → chr(0xE000 + ord(X)).
+# Диапазон E020–E07E покрывает печатный ASCII и в реальных документах не встречается.
+_SHIELD_BASE = 0xE000
+_SHIELD_RE   = re.compile(r'\\([*\[\]])')
+_UNSHIELD_RE = re.compile('[%s-%s]' % (chr(_SHIELD_BASE + 0x20),
+                                       chr(_SHIELD_BASE + 0x7E)))
+
+
+def _shield_escapes(text):
+    return _SHIELD_RE.sub(lambda m: chr(_SHIELD_BASE + ord(m.group(1))), text)
+
+
+def _unshield_escapes(text):
+    return _UNSHIELD_RE.sub(lambda m: chr(ord(m.group()) - _SHIELD_BASE), text)
+
+
 def _parse_bold_italic(paragraph, text, font_name, font_size,
                        font_color, is_italic_base):
     # ПРАВКА #22: поддержка ***bold-italic*** в inline-парсере
-    pattern = re.compile(r'(\*\*\*[^*\n]+?\*\*\*|\*\*[^*\n]+?\*\*|\*(?!\*)[^*\n]+?\*(?!\*))')
+    # ПРАВКА #36: правила флангов CommonMark — у открывающей звёздочки не может
+    # быть пробела после себя, у закрывающей — пробела перед собой; звёздочка
+    # между цифрами курсив не открывает. Иначе «2 * 3 * 4» и «2*3*4» съедались
+    # как эмфаза и цифры габаритов слипались в «234». Квантификатор +? (не *?)
+    # у содержимого — иначе «****» матчится с пустым содержимым между **…** и
+    # молча пропадает из документа вместо буквального вывода.
+    pattern = re.compile(
+        r'(\*\*\*(?!\s)[^*\n]+?(?<!\s)\*\*\*'
+        r'|\*\*(?!\s)[^*\n]+?(?<!\s)\*\*'
+        r'|(?:(?<!\d)\*|\*(?!\d))(?!\*)(?!\s)[^*\n]+?(?<![\s*])\*(?!\*))')
     parts = pattern.split(text)
     for part in parts:
         if not part:
@@ -302,7 +338,7 @@ def _parse_bold_italic(paragraph, text, font_name, font_size,
             is_italic = True
         set_run_font(run, font_name, font_size, font_color,
                      bold=is_bold, italic=is_italic)
-        run.text = clean_text
+        run.text = _unshield_escapes(clean_text)   # ПРАВКА #37
 
 
 def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
@@ -310,7 +346,8 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                           images=None, content_width_cm=None):
     """Обрабатывает ***жирный-курсив***, **жирный**, *курсив*, [ссылки](url)
     и инлайн-картинки ![alt](src) (ПРАВКА #32)."""
-    text = re.sub(r'\\([.\-+_)(:!=])', r'\1', text)      # ПРАВКА #24: раскрытие markdown-экранирования \X → X
+    text = _shield_escapes(text)                    # ПРАВКА #37: \* \[ \] → PUA, до разбиения по ссылкам
+    text = re.sub(r'\\([.\-+_)(:!=#|>`])', r'\1', text)  # ПРАВКА #24 + #37: раскрытие markdown-экранирования \X → X
     # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
     # ПРАВКА #32: ![alt](src) распознаётся ДО ссылок — раньше «!» оставался
     # литералом, а src превращался в мусорную гиперссылку https://image_1.png
@@ -322,7 +359,8 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
             continue
         mi = img_detail.match(segment)
         if mi:
-            alt, src = mi.group(1).strip(), mi.group(2).strip()
+            alt = _unshield_escapes(mi.group(1).strip())    # ПРАВКА #37
+            src = _unshield_escapes(mi.group(2).strip())   # ПРАВКА #37
             if images and src in images:
                 run = paragraph.add_run()
                 run.add_picture(io.BytesIO(images[src]),
@@ -333,7 +371,8 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
             continue
         m = link_detail.match(segment)
         if m:
-            link_text, link_url = m.group(1), m.group(2).strip()
+            link_text = m.group(1)
+            link_url = _unshield_escapes(m.group(2).strip())   # ПРАВКА #37
             if link_url:
                 add_hyperlink_run(paragraph, link_url, link_text,
                                   font_name, font_size)
@@ -490,6 +529,8 @@ def add_table_cell_content(p, text, font_size=10):
     ПРАВКА #8: Добавляет ✓/✗ перед значениями «Да»/«Нет» в ячейках таблицы.
     Применяется для любой сравнительной таблицы автоматически.
     ПРАВКА #17: поведение управляется флагом ENABLE_TABLE_SYMBOLS.
+    ПРАВКА #34: иконка ставится ПЕРЕД текстом, сам текст ячейки не вырезается —
+    «Да — 36 месяцев» → «✓ Да — 36 месяцев», «Нет данных» → «✗ Нет данных».
     """
     stripped = text.strip()
 
@@ -497,32 +538,14 @@ def add_table_cell_content(p, text, font_size=10):
         parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
         return
 
-    # Проверяем начало ячейки на Да/Нет
-    if re.match(r'^Да\b', stripped, re.IGNORECASE):
-        icon_run = p.add_run('✓ ')
-        set_run_font(icon_run, 'PT Sans', font_size, COLOR_YES, bold=True)
-        rest = re.sub(r'^Да\b\s*', '', stripped, flags=re.IGNORECASE)
-        if rest:
-            parse_inline_markdown(p, rest, 'PT Sans', font_size, TEXT_DARK)
-        else:
-            run = p.add_run('Да')
-            set_run_font(run, 'PT Sans', font_size, TEXT_DARK)
-    elif re.match(r'^Нет\b', stripped, re.IGNORECASE):
-        icon_run = p.add_run('✗ ')
-        set_run_font(icon_run, 'PT Sans', font_size, COLOR_NO, bold=True)
-        rest = re.sub(r'^Нет\b\s*', '', stripped, flags=re.IGNORECASE)
-        if rest:
-            parse_inline_markdown(p, rest, 'PT Sans', font_size, TEXT_DARK)
-        else:
-            run = p.add_run('Нет')
-            set_run_font(run, 'PT Sans', font_size, TEXT_DARK)
-    elif re.match(r'^Отсутствует\b', stripped, re.IGNORECASE):
-        icon_run = p.add_run('✗ ')
-        set_run_font(icon_run, 'PT Sans', font_size, COLOR_NO, bold=True)
-        rest = re.sub(r'^Отсутствует\b\s*', '', stripped, flags=re.IGNORECASE)
-        parse_inline_markdown(p, ('Отсутствует ' + rest).strip(), 'PT Sans', font_size, TEXT_DARK)
-    else:
-        parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
+    # Проверяем начало ячейки на Да/Нет/Отсутствует
+    m = re.match(r'^(Да|Нет|Отсутствует)\b', stripped, re.IGNORECASE)
+    if m:
+        is_yes = m.group(1).lower() == 'да'
+        icon_run = p.add_run('✓ ' if is_yes else '✗ ')
+        set_run_font(icon_run, 'PT Sans', font_size,
+                     COLOR_YES if is_yes else COLOR_NO, bold=True)
+    parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
 
 
 # =============================================================================
@@ -923,6 +946,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             p.paragraph_format.space_after  = Pt(10)
             add_paragraph_border(p, 'left', BRAND_ORANGE, 18)
             add_paragraph_shading(p, BG_LIGHT_ORANGE)
+            # ПРАВКА #37, известный предел: маркер цитаты снимается до парсера,
+            # поэтому экранированный \> внутри цитаты не восстанавливается
             parse_inline_markdown(p, block.replace('>', '').strip(),
                                   'PT Sans', 11, "999999", is_italic_base=True)
             after_heading = False
@@ -1044,6 +1069,12 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                         p.paragraph_format.space_after = Pt(0)
                         # ПРАВКА #8: автоматические ✓/✗ для Да/Нет/Отсутствует
                         add_table_cell_content(p, c, font_size=10)
+
+            # ПРАВКА #35: шапка повторяется на каждой странице,
+            # строка не разрывается пополам между страницами
+            set_row_flag(table.rows[0], 'w:tblHeader')
+            for row in table.rows:
+                set_row_flag(row, 'w:cantSplit')
 
             # Компактный отступ после таблицы
             sp = doc.add_paragraph()
