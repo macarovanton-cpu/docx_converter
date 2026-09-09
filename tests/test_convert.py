@@ -440,3 +440,24 @@ def test_data_table_layout_is_autofit(tmp_path):
     doc = _doc("| A | B |\n|---|---|\n| 1 | 2 |", tmp_path, "autofit.docx")
     layout = doc.tables[0]._tbl.find(qn('w:tblPr')).find(qn('w:tblLayout'))
     assert layout.get(qn('w:type')) == "autofit"
+
+
+# =============================================================================
+# ПРАВКА #47: двойные звёздочки между цифрами не включают жирный
+# =============================================================================
+
+def test_double_asterisks_between_digits_survive(tmp_path):
+    runs = _runs("Габариты 2**3**4 метра.", tmp_path)
+    assert "2**3**4" in "".join(t for t, _, _ in runs)
+    assert not any(bold for _, bold, _ in runs)
+
+
+@pytest.mark.parametrize("md,word", [
+    ("**Кому:** Тестовый получатель", "Кому:"),
+    ("**Этап 1** Монтаж фундамента.", "Этап 1"),
+    ("**С уважением,**\n**Тестировщик**", "С уважением,"),
+    ("Позиция **2** в списке.", "2"),
+])
+def test_ordinary_bold_still_works(md, word, tmp_path):
+    """Обычный жирный текст правкой не задет — в том числе жирная цифра."""
+    assert (word, True, False) in _runs(md, tmp_path)
