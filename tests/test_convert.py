@@ -308,3 +308,21 @@ def test_emoji_at_paragraph_start_still_is_a_photo_placeholder(tmp_path):
     doc = _doc("📷 Место для фотографии весов на объекте", tmp_path,
                "start.docx")
     assert _photo_band(doc.paragraphs[0]) == (True, "FFF8F0")
+
+
+# =============================================================================
+# ПРАВКА #42: жирная подпись «**С уважением,**»
+# =============================================================================
+
+@pytest.mark.parametrize("md", [
+    "С уважением,\nТестировщик",
+    "*С уважением,*\n*Тестировщик*",
+    "**С уважением,**\n**Тестировщик**",
+])
+def test_signature_block_recognised_with_any_asterisks(md, tmp_path):
+    """Подпись — красная линия сверху и keepLines на всём блоке."""
+    doc = _doc(md, tmp_path, f"sig{len(md)}.docx")
+    pPr = doc.paragraphs[0]._p.find(qn('w:pPr'))
+    top = pPr.find(qn('w:pBdr')).find(qn('w:top'))
+    assert top.get(qn('w:color')) == "D04514"
+    assert pPr.find(qn('w:keepLines')) is not None

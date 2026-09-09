@@ -280,7 +280,8 @@ def is_requisites_block(text):
     return bool(re.match(r'^\*\*(Кому|От кого|Кому:|От кого:)', text))
 
 def is_signature_block(text):
-    return bool(re.match(r'^\*?С уважением', text))
+    # ПРАВКА #42: ^\** вместо ^\*? — одна звёздочка не покрывала «**С уважением,**»
+    return bool(re.match(r'^\**С уважением', text))
 
 def is_callout_block(text):
     """Блок !! текст !! — callout-врезка."""
