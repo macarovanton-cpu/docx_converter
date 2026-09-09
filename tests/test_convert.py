@@ -143,6 +143,61 @@ def test_real_link_still_works(tmp_path):
                        str(out))
     doc = Document(str(out))
     assert doc.element.body.findall('.//' + qn('w:hyperlink'))
+    assert _link_targets("Ссылка [сайт](https://tenzosila.ru) работает.",
+                         tmp_path) == ["https://tenzosila.ru"]
+
+
+# ПРАВКА #38: схема в адресе не затирается префиксом, автоссылки распознаются
+def _link_targets(md, tmp_path):
+    """Внешние адреса гиперссылок из word/_rels/document.xml.rels."""
+    out = tmp_path / "targets.docx"
+    convert_md_to_docx(md, str(out))
+    with zipfile.ZipFile(out) as z:
+        rels = z.read('word/_rels/document.xml.rels').decode('utf-8')
+    return re.findall(r'Target="([^"]*)"\s+TargetMode="External"', rels)
+
+
+def _hyperlinks(md, tmp_path):
+    out = tmp_path / "hl.docx"
+    convert_md_to_docx(md, str(out))
+    return Document(str(out)).element.body.findall('.//' + qn('w:hyperlink'))
+
+
+def test_mailto_and_tel_keep_scheme(tmp_path):
+    """Адрес со схемой уходит в связи как есть, без https:// перед схемой."""
+    targets = _link_targets(
+        "Почта [написать](mailto:sales@tenzosila.ru) и телефон "
+        "<tel:+74732000000> в подписи.", tmp_path)
+    assert "mailto:sales@tenzosila.ru" in targets
+    assert "tel:+74732000000" in targets
+    assert not any(t.startswith("https://mailto:") or t.startswith("https://tel:")
+                   for t in targets)
+
+
+def test_angle_autolink_becomes_hyperlink(tmp_path):
+    """<схема:адрес> → гиперссылка, текст без угловых скобок."""
+    md = "Электронная почта: <mailto:info@tenzosila.ru> — кликается."
+    assert _hyperlinks(md, tmp_path)
+    assert _link_targets(md, tmp_path) == ["mailto:info@tenzosila.ru"]
+    out = tmp_path / "angle.docx"
+    convert_md_to_docx(md, str(out))
+    text = "".join(p.text for p in Document(str(out)).paragraphs)
+    assert "mailto:info@tenzosila.ru" in text
+    assert "<" not in text and ">" not in text
+
+
+def test_bare_url_becomes_hyperlink(tmp_path):
+    """Голый http(s)-URL становится ссылкой; точка фразы в адрес не уезжает."""
+    md = "Обычная ссылка: https://tenzosila.ru/catalog."
+    assert _hyperlinks(md, tmp_path)
+    assert _link_targets(md, tmp_path) == ["https://tenzosila.ru/catalog"]
+
+
+def test_scheme_inside_word_is_not_a_link(tmp_path):
+    """Двоеточие в тексте, голая почта и склеенный URL ссылками не становятся."""
+    md = ("Файл version:2 по ГОСТ 29329-92:2020, пишите info@tenzosila.ru, "
+          "смотри тутhttps://example.com дальше.")
+    assert not _hyperlinks(md, tmp_path)
 
 
 # Символы, которые механизм экранирования (ПРАВКА #37) распаковывает
@@ -173,3 +228,11 @@ def test_no_shield_placeholders_leak_into_document(tmp_path):
 
     assert not any(0xE000 <= ord(c) <= 0xE0FF for c in combined)
     assert not _BACKSLASH_ESCAPE_RE.search(combined)
+
+
+# ПРАВКА #39: инлайн-картинка без файла не исчезает молча
+def test_inline_missing_image_matches_block_placeholder(tmp_path):
+    inline = _text("начало ![](missing_inline.png) и продолжение.", tmp_path)
+    block = _text("![](missing_inline.png)", tmp_path)
+    assert "(изображение не найдено: missing_inline.png)" in inline
+    assert block.strip() and block.strip() in inline
