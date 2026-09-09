@@ -347,3 +347,51 @@ def test_no_empty_paragraph_before_first_heading(tmp_path):
                        template_path=str(TEMPLATE))
     doc = Document(str(out))
     assert doc.paragraphs[0].text == "Заголовок"
+
+
+# =============================================================================
+# ПРАВКА #44: второй нумерованный список начинается с единицы
+# =============================================================================
+
+def _num_ids(doc):
+    """numId каждого абзаца по порядку; None — абзац вне списка."""
+    ids = []
+    for p in doc.paragraphs:
+        pPr = p._p.find(qn('w:pPr'))
+        numPr = None if pPr is None else pPr.find(qn('w:numPr'))
+        ids.append(None if numPr is None
+                   else numPr.find(qn('w:numId')).get(qn('w:val')))
+    return ids
+
+
+def _restarted_num_ids(doc):
+    """numId, у которых в numbering.xml есть startOverride=1."""
+    numbering = doc.part.numbering_part.element
+    return {n.get(qn('w:numId')) for n in numbering.findall(qn('w:num'))
+            if n.find(qn('w:lvlOverride')) is not None}
+
+
+def test_second_numbered_list_restarts_after_blank_line_only(tmp_path):
+    """Два списка подряд через одну пустую строку — разные numId с рестартом."""
+    doc = _doc("1. Первый\n2. Второй\n\n1. Снова первый\n2. Снова второй",
+               tmp_path, "two_lists.docx")
+    ids = [i for i in _num_ids(doc) if i is not None]
+    assert len(ids) == 4
+    assert ids[0] == ids[1] and ids[2] == ids[3]
+    assert ids[0] != ids[2]
+    assert {ids[0], ids[2]} <= _restarted_num_ids(doc)
+
+
+def test_separated_numbered_lists_still_restart(tmp_path):
+    """ПРАВКА #31 не сломана: между списками стоит абзац — сброс работает."""
+    doc = _doc("1. Первый\n2. Второй\n\nАбзац-разделитель.\n\n"
+               "1. Снова первый\n2. Снова второй", tmp_path, "sep_lists.docx")
+    ids = [i for i in _num_ids(doc) if i is not None]
+    assert ids[0] == ids[1] and ids[2] == ids[3] and ids[0] != ids[2]
+
+
+def test_single_numbered_list_keeps_one_num_id(tmp_path):
+    """Список из одного блока не разваливается на два счётчика."""
+    doc = _doc("1. Первый\n2. Второй\n3. Третий", tmp_path, "one_list.docx")
+    ids = [i for i in _num_ids(doc) if i is not None]
+    assert len(set(ids)) == 1

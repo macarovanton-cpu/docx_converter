@@ -869,6 +869,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             # ПРАВКА #31: любой не-списочный блок завершает текущий
             # нумерованный список — следующий начнётся с 1
             current_numbered_num_id = None
+        elif re.match(r'^1\. ', block):
+            # ПРАВКА #44: два списка, разделённые только пустой строкой, делили
+            # один numId и второй продолжал нумерацию первого («3, 4» вместо
+            # «1, 2»). Блок, начинающийся с «1. », открывает новый список.
+            current_numbered_num_id = None
         if not is_list_item and last_list_paragraph:
             last_list_paragraph.paragraph_format.space_after = Pt(10)
             last_list_paragraph = None
