@@ -490,6 +490,8 @@ def add_table_cell_content(p, text, font_size=10):
     ПРАВКА #8: Добавляет ✓/✗ перед значениями «Да»/«Нет» в ячейках таблицы.
     Применяется для любой сравнительной таблицы автоматически.
     ПРАВКА #17: поведение управляется флагом ENABLE_TABLE_SYMBOLS.
+    ПРАВКА #34: иконка ставится ПЕРЕД текстом, сам текст ячейки не вырезается —
+    «Да — 36 месяцев» → «✓ Да — 36 месяцев», «Нет данных» → «✗ Нет данных».
     """
     stripped = text.strip()
 
@@ -497,32 +499,14 @@ def add_table_cell_content(p, text, font_size=10):
         parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
         return
 
-    # Проверяем начало ячейки на Да/Нет
-    if re.match(r'^Да\b', stripped, re.IGNORECASE):
-        icon_run = p.add_run('✓ ')
-        set_run_font(icon_run, 'PT Sans', font_size, COLOR_YES, bold=True)
-        rest = re.sub(r'^Да\b\s*', '', stripped, flags=re.IGNORECASE)
-        if rest:
-            parse_inline_markdown(p, rest, 'PT Sans', font_size, TEXT_DARK)
-        else:
-            run = p.add_run('Да')
-            set_run_font(run, 'PT Sans', font_size, TEXT_DARK)
-    elif re.match(r'^Нет\b', stripped, re.IGNORECASE):
-        icon_run = p.add_run('✗ ')
-        set_run_font(icon_run, 'PT Sans', font_size, COLOR_NO, bold=True)
-        rest = re.sub(r'^Нет\b\s*', '', stripped, flags=re.IGNORECASE)
-        if rest:
-            parse_inline_markdown(p, rest, 'PT Sans', font_size, TEXT_DARK)
-        else:
-            run = p.add_run('Нет')
-            set_run_font(run, 'PT Sans', font_size, TEXT_DARK)
-    elif re.match(r'^Отсутствует\b', stripped, re.IGNORECASE):
-        icon_run = p.add_run('✗ ')
-        set_run_font(icon_run, 'PT Sans', font_size, COLOR_NO, bold=True)
-        rest = re.sub(r'^Отсутствует\b\s*', '', stripped, flags=re.IGNORECASE)
-        parse_inline_markdown(p, ('Отсутствует ' + rest).strip(), 'PT Sans', font_size, TEXT_DARK)
-    else:
-        parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
+    # Проверяем начало ячейки на Да/Нет/Отсутствует
+    m = re.match(r'^(Да|Нет|Отсутствует)\b', stripped, re.IGNORECASE)
+    if m:
+        is_yes = m.group(1).lower() == 'да'
+        icon_run = p.add_run('✓ ' if is_yes else '✗ ')
+        set_run_font(icon_run, 'PT Sans', font_size,
+                     COLOR_YES if is_yes else COLOR_NO, bold=True)
+    parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
 
 
 # =============================================================================
