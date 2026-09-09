@@ -121,7 +121,8 @@ def set_cell_margins_and_borders(cell, hex_color, sz):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcMar = OxmlElement('w:tcMar')
-    for side, w in [('top','100'),('bottom','100'),('left','160'),('right','160')]:
+    # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+    for side, w in [('top','100'),('left','160'),('bottom','100'),('right','160')]:
         node = OxmlElement(f'w:{side}')
         node.set(qn('w:w'), w)
         node.set(qn('w:type'), 'dxa')
@@ -263,27 +264,29 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
     hyperlink = OxmlElement('w:hyperlink')
     hyperlink.set(qn('r:id'), r_id)
     run_el = OxmlElement('w:r')
+    # ПРАВКА #51: порядок детей rPr задан CT_RPr —
+    # rFonts, b, i, color, sz, szCs, u. Раньше u стоял перед sz и szCs.
     rPr = OxmlElement('w:rPr')
     rFonts = OxmlElement('w:rFonts')
     rFonts.set(qn('w:ascii'), font_name)
     rFonts.set(qn('w:hAnsi'), font_name)
     rPr.append(rFonts)
+    if bold:
+        rPr.append(OxmlElement('w:b'))
+    if italic:
+        rPr.append(OxmlElement('w:i'))
     color_el = OxmlElement('w:color')
     color_el.set(qn('w:val'), BRAND_BLUE)
     rPr.append(color_el)
-    u = OxmlElement('w:u')
-    u.set(qn('w:val'), 'single')
-    rPr.append(u)
     sz = OxmlElement('w:sz')
     sz.set(qn('w:val'), str(font_size * 2))
     rPr.append(sz)
     szCs = OxmlElement('w:szCs')
     szCs.set(qn('w:val'), str(font_size * 2))
     rPr.append(szCs)
-    if bold:
-        rPr.append(OxmlElement('w:b'))
-    if italic:
-        rPr.append(OxmlElement('w:i'))
+    u = OxmlElement('w:u')
+    u.set(qn('w:val'), 'single')
+    rPr.append(u)
     run_el.append(rPr)
     t = OxmlElement('w:t')
     t.set(qn('xml:space'), 'preserve')
@@ -522,23 +525,26 @@ def add_intro_paragraph(doc, block, content_width_cm):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBorders = OxmlElement('w:tcBorders')
-    for side in ['top', 'bottom', 'right']:
+    # ПРАВКА #51: порядок сторон задан схемой — левая граница не может
+    # дописываться последней, её место между top и bottom
+    for side in ['top', 'left', 'bottom', 'right']:
         bdr = OxmlElement(f'w:{side}')
-        bdr.set(qn('w:val'), 'none')
-        bdr.set(qn('w:sz'), '0')
-        bdr.set(qn('w:color'), 'auto')
+        if side == 'left':
+            bdr.set(qn('w:val'), 'single')
+            bdr.set(qn('w:sz'), '18')   # ~2.25pt
+            bdr.set(qn('w:space'), '4')
+            bdr.set(qn('w:color'), BRAND_BLUE)
+        else:
+            bdr.set(qn('w:val'), 'none')
+            bdr.set(qn('w:sz'), '0')
+            bdr.set(qn('w:color'), 'auto')
         tcBorders.append(bdr)
-    left_bdr = OxmlElement('w:left')
-    left_bdr.set(qn('w:val'), 'single')
-    left_bdr.set(qn('w:sz'), '18')   # ~2.25pt
-    left_bdr.set(qn('w:space'), '4')
-    left_bdr.set(qn('w:color'), BRAND_BLUE)
-    tcBorders.append(left_bdr)
     insert_in_order(tcPr, tcBorders)
 
     # Внутренние отступы ячейки
     tcMar = OxmlElement('w:tcMar')
-    for side, w in [('top','80'),('bottom','80'),('left','220'),('right','0')]:
+    # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+    for side, w in [('top','80'),('left','220'),('bottom','80'),('right','0')]:
         node = OxmlElement(f'w:{side}')
         node.set(qn('w:w'), w)
         node.set(qn('w:type'), 'dxa')
@@ -586,7 +592,8 @@ def add_callout_box(doc, text, content_width_cm):
     insert_in_order(tcPr, tcBorders)
 
     tcMar = OxmlElement('w:tcMar')
-    for side, w in [('top','140'),('bottom','140'),('left','220'),('right','220')]:
+    # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+    for side, w in [('top','140'),('left','220'),('bottom','140'),('right','220')]:
         node = OxmlElement(f'w:{side}')
         node.set(qn('w:w'), w)
         node.set(qn('w:type'), 'dxa')

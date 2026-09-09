@@ -507,6 +507,11 @@ SCHEMA_ORDER = {
     'tblPr':     ['tblW', 'tblCellSpacing', 'tblLayout', 'tblLook'],
     'numbering': ['abstractNum', 'num'],
     'settings':  ['zoom', 'autoHyphenation', 'doNotHyphenateCaps'],
+    # ПРАВКА #51: стороны и внутри tcMar/tcBorders идут по схеме,
+    # а в rPr подчёркивание — после размера шрифта
+    'tcMar':     ['top', 'left', 'bottom', 'right'],
+    'tcBorders': ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'],
+    'rPr':       ['rFonts', 'b', 'i', 'color', 'sz', 'szCs', 'u'],
 }
 
 
@@ -525,12 +530,19 @@ def _out_of_order(root):
     return bad
 
 
-def test_oxml_children_follow_schema_order(tmp_path):
-    """Весь test_formatting.md: в document.xml, numbering.xml и settings.xml
-    дочерние элементы идут в порядке, заданном схемой OOXML."""
-    md = (Path(__file__).resolve().parents[1] / "test_formatting.md").read_text(
-        encoding='utf-8')
-    out = tmp_path / "order.docx"
+# В test_formatting.md интро-полосы нет намеренно (после H1 идёт блок
+# реквизитов), поэтому её tcBorders добирается отдельным документом.
+INTRO_MD = "# Заголовок\n\nВводный абзац во врезке с левой полосой."
+
+
+@pytest.mark.parametrize("source", ["test_formatting.md", "intro"])
+def test_oxml_children_follow_schema_order(source, tmp_path):
+    """В document.xml, numbering.xml и settings.xml дочерние элементы идут
+    в порядке, заданном схемой OOXML."""
+    md = (INTRO_MD if source == "intro" else
+          (Path(__file__).resolve().parents[1] / source).read_text(
+              encoding='utf-8'))
+    out = tmp_path / f"order_{source}.docx"
     convert_md_to_docx(md, str(out))
     doc = Document(str(out))
     parts = [doc.element.body, doc.part.numbering_part.element,
