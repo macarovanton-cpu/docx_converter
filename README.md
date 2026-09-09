@@ -16,8 +16,8 @@
 - Три способа ввода: вставить Markdown текст, загрузить `.md` файл, загрузить готовый DOCX/PDF/TXT с авто-распознаванием структуры
 - Два типа документа на выходе: письмо/коммерческое предложение, пояснительная записка
 - Шаблон с фирменным хедером (логотип, реквизиты компании, ОГРН, ИНН) подгружается с Google Drive
-- Кастомный Markdown-синтаксис: callout-врезки `!! ... !!`, блок реквизитов `**Кому:**`, цитаты, плейсхолдеры фото
-- Автоматические ✓/✗ в сравнительных таблицах для ячеек «Да»/«Нет»/«Отсутствует»
+- Кастомный Markdown-синтаксис: callout-врезки `!! ... !!`, блок реквизитов `**Кому:**`, цитаты, плейсхолдеры фото, заголовки `####`/`#####`/`######` (H4–H6), автоссылки `<https://...>` в угловых скобках и голые URL прямо в тексте
+- Автоматические ✓/✗ перед ячейками, начинающимися с «Да»/«Нет»/«Отсутствует» — иконка добавляется перед текстом, сам текст ячейки не обрезается (например, «Да — 36 месяцев» → «✓ Да — 36 месяцев»)
 
 ### Файлы -> Markdown
 
@@ -66,16 +66,17 @@ OCR-режим `auto` реализован и подключён к UI, но `oc
 
 ## Архитектура
 
-Шесть Python-модулей:
+Семь Python-модулей:
 
-- **`app.py`** — Streamlit UI. Содержит режимы `Markdown -> DOCX` и `Файлы -> Markdown`. В первом режиме загружает `.docx` шаблон с Google Drive через service account, вызывает `convert_md_to_docx`, отдаёт результат на скачивание. Во втором режиме принимает несколько файлов, вызывает MarkItDown-слой и отдаёт `.md`/ZIP на скачивание.
-- **`convert.py`** — ядро Markdown → DOCX (~1150 строк). Единственная публичная функция: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`.
+- **`app.py`** — Streamlit UI. Содержит режимы `Markdown -> DOCX` и `Файлы -> Markdown`. В первом режиме загружает `.docx` шаблон с Google Drive через service account, вызывает `convert_md_to_docx`, отдаёт результат на скачивание. Во втором режиме принимает несколько файлов, вызывает `pdf_core`/MarkItDown-слой и отдаёт `.md`/ZIP на скачивание.
+- **`convert.py`** — ядро Markdown → DOCX (1316 строк). Единственная публичная функция: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`.
 - **`file_converter.py`** — обратная сторона: DOCX/PDF/TXT → Markdown для предзаполнения редактора, а также отдельный MarkItDown-слой (`convert_with_markitdown`) для PDF/DOCX/XLSX/PPTX → Markdown и диагностика PDF (`analyze_pdf_pages` через pypdf).
 - **`markdown_cleanup.py`** — детерминированная OCR-чистка Markdown (`cleanup_ocr_markdown`). Покрыта тестами, но **не подключена к тракту/UI** (backend-only).
 - **`ocr_auto_mode.py`** — оркестратор «OCR или нет» (`convert_pdf_with_optional_ocr`): по диагностике страниц решает, гнать ли PDF через OCR, с учётом выбранного диапазона страниц.
 - **`ocr_converter.py`** — обёртка OCRmyPDF через `subprocess` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`).
+- **`pdf_core.py`** — провайдеро-независимое ядро PDF → Markdown. Публичные функции: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider)` и `pdf_to_markdown_with_status(...)` (последнюю использует `app.py` — UI показывает `ocr_status`). Берёт на себя работу с bytes/tempfile, не зависит от Streamlit. Определяет протокол `OcrProvider` с одной реализацией — `OcrmypdfProvider`; при `provider=None` маршрутизирует через `ocr_auto_mode.convert_pdf_with_optional_ocr` без изменений в поведении.
 
-OCR-тракт (режим `auto`): `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter` (subprocess `ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` по OCR-слою.
+OCR-тракт (режим `auto`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter` (subprocess `ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` по OCR-слою.
 
 Шаблон `template.docx` хранится на Google Drive (file_id `1FdPo8Ddo317ZYoPzraCTy5R4E72Ieqba`), в репозитории его нет.
 
@@ -110,16 +111,30 @@ Push в `main` → Streamlit Community Cloud автоматически пере
 
 ```
 docx_converter/
-├── app.py                 # Streamlit UI
-├── convert.py             # ядро Markdown → DOCX
-├── file_converter.py      # обратное направление + MarkItDown-слой
-├── markdown_cleanup.py    # детерминированная OCR-чистка (backend-only)
-├── ocr_auto_mode.py       # оркестратор «OCR или нет»
-├── ocr_converter.py       # обёртка OCRmyPDF через subprocess
+├── app.py                  # Streamlit UI
+├── convert.py              # ядро Markdown → DOCX
+├── file_converter.py       # обратное направление + MarkItDown-слой
+├── markdown_cleanup.py     # детерминированная OCR-чистка (backend-only)
+├── ocr_auto_mode.py        # оркестратор «OCR или нет»
+├── ocr_converter.py        # обёртка OCRmyPDF через subprocess
+├── pdf_core.py             # провайдеро-независимое ядро PDF → Markdown
 ├── requirements.txt
-├── CLAUDE.md              # шпаргалка для Claude Code
-├── README.md              # этот файл
+├── conftest.py             # пустой, нужен pytest для корневого rootdir
+├── tests/
+│   ├── test_convert.py         # регрессионные тесты convert.py
+│   ├── test_markdown_cleanup.py
+│   ├── test_ocr_auto_mode.py
+│   └── test_pdf_core.py
+├── test_formatting.md      # md-фикстура для test_convert.py (полный прогон форматирования)
+├── test_formatting_bom.md  # md-фикстура: файл с BOM в начале
+├── test_image.png          # png-фикстура для инлайн-картинки в test_formatting.md
+├── CLAUDE.md                # шпаргалка для Claude Code
+├── AGENTS.md                # шпаргалка для Codex/других агентов
+├── PROJECT_PLAN.md          # роадмап OCR-фичи
+├── PROJECT_STATUS.md        # текущий статус проекта
+├── PROJECT_PROGRESS.md      # архивный лог фичи MarkItDown-импорта
+├── README.md                # этот файл
 ├── .devcontainer/
-│   └── devcontainer.json  # авто-запуск Streamlit в Codespaces
+│   └── devcontainer.json    # авто-запуск Streamlit в Codespaces
 └── .gitignore
 ```
