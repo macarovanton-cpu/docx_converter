@@ -8,7 +8,7 @@ These are the rules of engagement. Read them before touching code.
 
 **Plan first, then execute.** Start non-trivial work in plan mode. Iterate on the plan until it is right, then switch to auto-accept and let the implementation run in one go. A good plan is the highest-leverage artifact in the session — a bad plan produces 40 changes nobody asked for.
 
-**Verify your own work.** Never hand back code you have not checked. Run `pytest -v`. Run the audit battery in `scratchpad/audit/`. Generate a real `.docx` and inspect it programmatically with `python-docx` (styles, alignment, breaks) — do not assume the output is correct because the code looks correct. Self-verification is worth more than confidence.
+**Verify your own work.** Never hand back code you have not checked. Run `pytest -v`. Generate a real `.docx` and inspect it programmatically with `python-docx` (styles, alignment, breaks) — do not assume the output is correct because the code looks correct. Self-verification is worth more than confidence.
 
 **Every mistake becomes a rule.** When a bug or a wrong assumption is found, do not just fix the code — add the rule to this file so it is not repeated. This file is the project's memory across sessions. Keep it under ~200 lines so it is actually read.
 
@@ -17,6 +17,12 @@ These are the rules of engagement. Read them before touching code.
 **The human stays in the review seat.** Architectural decisions, brand rules, and what ships to clients are the human's call. Ask one clarifying question when the spec is ambiguous — do not guess.
 
 **AI-written code is statistically dirty.** Plausible-looking code that passes tests can still be conceptually wrong: redundant loops, silently dropped data, edge cases that never fire. Bugs here are conceptual, not syntactic. Assume this about your own output and look for it.
+
+## Verifying results
+
+- Any check done programmatically gets turned into a test in `tests/`. A one-off script in a session scratch folder is lost the moment the session ends — it verified nothing for the next session.
+- Parsing `word/document.xml` verifies document *structure* (styles applied, elements present, correct order). It does not verify *appearance*. Only a human opening the file in real Word can confirm it looks right.
+- An agent's report of what it did is not evidence. `git log` and `git status` are.
 
 ## Forbidden patterns
 
@@ -35,8 +41,7 @@ streamlit run app.py
 ```
 
 Local-run gotchas (learned 2026-07-15):
-- MD→DOCX needs a template: `.streamlit/secrets.toml` here is **empty (0 bytes)**, so Drive is unavailable and the app falls back to `C:\Users\tonik\Desktop\docx_converter\template.docx` — that file must exist, otherwise «Шаблон не найден».
-- `convert.py` prints emoji (`✅`); on a cp1251 Windows console this raises `UnicodeEncodeError` and the UI shows it as a conversion error. Run with `python -X utf8 -m streamlit run app.py` (or set `PYTHONIOENCODING=utf-8`).
+- MD→DOCX needs a template: without a `[gcp_service_account]` section in `.streamlit/secrets.toml`, Drive is unavailable and the app falls back to `C:\Users\tonik\Desktop\docx_converter\template.docx` — that file must exist, otherwise «Шаблон не найден».
 
 The dev container auto-starts the app on port 8501 after attach (`postAttachCommand` in `.devcontainer/devcontainer.json`).
 
@@ -54,7 +59,7 @@ Push to `main` → Streamlit Cloud picks it up automatically. No CI step require
 Seven Python modules:
 
 - **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types.
-- **`convert.py`** — Core Markdown → DOCX engine (~1050 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
+- **`convert.py`** — Core Markdown → DOCX engine (1316 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
 - **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Also hosts the `Файлы -> Markdown` MarkItDown layer (`convert_with_markitdown`) and PDF diagnostics (`analyze_pdf_pages`, via pypdf).
 - **`markdown_cleanup.py`** — Deterministic OCR Markdown cleanup (`cleanup_ocr_markdown`). Covered by tests but **not connected to the UI or conversion flow** — backend-only.
 - **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
@@ -81,7 +86,8 @@ Page margins: left 2 cm, right 1.5 cm → `CONTENT_WIDTH_CM = 17.5`.
 |---|---|
 | `# …` | H1: PT Sans Narrow 18 pt BRAND_BLUE + red underline rule |
 | `## …` | H2: PT Sans Narrow 14 pt BRAND_RED |
-| `### …` | H3: PT Sans Narrow 11 pt TEXT_DARK bold |
+| `### …` | H3: PT Sans Narrow 13 pt TEXT_DARK bold |
+| `#### … / ##### … / ###### …` | H4–H6: PT Sans Narrow 12 pt TEXT_DARK bold, no decorative lines (all three levels render identically) |
 | First `\n\n` block after H1 | `add_intro_paragraph` — left blue border accent |
 | `> …` | Blockquote: orange left border, light grey fill, italic |
 | `!! text !!` | `add_callout_box` — light blue fill table with border |
@@ -97,13 +103,13 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 ## Numbered edits convention
 
-`convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way.
+`convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code.** The file contains #1–#24, #26–#33. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out. Do not assume README's edit list is accurate; verify against the code.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#51. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
-The P0 audit findings were fixed in the #28–#33 cycle (CRLF normalization; #26 vs requisites/stage blocks; callout spacer; numbered-list detection and restart; `![alt](src)` garbage hyperlinks; table cell split/padding). The audit battery lives in the session scratchpad (`run_audit*.py`) — rerun it after touching block dispatch, lists, tables, or the inline parser.
+The P0 audit findings were fixed in the #28–#33 cycle (CRLF normalization; #26 vs requisites/stage blocks; callout spacer; numbered-list detection and restart; `![alt](src)` garbage hyperlinks; table cell split/padding). Rerun `pytest -v` after touching block dispatch, lists, tables, or the inline parser.
 
 Documented long-standing limits: column alignment from `:----` separators is not implemented; list markers are capped at 2 digits (`^\d{1,2}\. `) so years like «2025.» are not eaten as list items; pseudo-headings without applied Word styles (mammoth cannot detect them); double-digit page numbers render vertically in LibreOffice.
 

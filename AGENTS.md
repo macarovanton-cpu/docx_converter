@@ -19,7 +19,6 @@ rtk powershell -NoProfile -Command "<command>"
 - Do not change `convert.py` unless clearly necessary for the task.
 - Do not change `app.py` or `file_converter.py` unless the task explicitly
   requires it.
-- Do not add OCR to the UI without a separate explicit task.
 - Do not add LLM cleanup without a separate explicit task.
 - Do not add new dependencies unless the user explicitly asks for packaging or
   dependency changes.

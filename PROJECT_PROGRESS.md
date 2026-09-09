@@ -1,5 +1,12 @@
 # Progress: MarkItDown import feature
 
+> **Archival document.** This is a point-in-time snapshot of the
+> `feature/markitdown-import` branch and does not reflect the current state of
+> the project (OCR is now implemented and wired into the UI, `pdf_core.py`
+> exists, and `convert.py` has moved well past the edits described here). Kept
+> for history — see `PROJECT_STATUS.md` and `PROJECT_PLAN.md` for the current
+> picture.
+
 Branch: `feature/markitdown-import`
 
 ## Implemented
