@@ -480,3 +480,14 @@ def test_conversion_with_template_prints_nothing(tmp_path, capsys):
                        template_path=str(TEMPLATE))
     captured = capsys.readouterr()
     assert captured.out == "" and captured.err == ""
+
+
+# =============================================================================
+# ПРАВКА #49: cantSplit стоит раньше tblHeader
+# =============================================================================
+
+def test_cant_split_precedes_tbl_header_in_first_row(table):
+    """В шапке оба флага, и cantSplit идёт первым — так их ждёт схема OOXML."""
+    trPr = table.rows[0]._tr.find(qn('w:trPr'))
+    tags = [c.tag.split('}')[-1] for c in trPr]
+    assert tags.index('cantSplit') < tags.index('tblHeader')

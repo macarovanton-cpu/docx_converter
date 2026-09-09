@@ -1126,9 +1126,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
             # ПРАВКА #35: шапка повторяется на каждой странице,
             # строка не разрывается пополам между страницами
-            set_row_flag(table.rows[0], 'w:tblHeader')
+            # ПРАВКА #49: по схеме OOXML внутри trPr cantSplit идёт перед
+            # tblHeader — append ставил их в обратном порядке
             for row in table.rows:
                 set_row_flag(row, 'w:cantSplit')
+            set_row_flag(table.rows[0], 'w:tblHeader')
 
             # Компактный отступ после таблицы
             sp = doc.add_paragraph()
