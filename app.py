@@ -213,6 +213,10 @@ def _display_ocr_candidate_status(uploaded_file, ext: str, ocr_mode: str,
 def _convert_uploaded_file(uploaded_file, page_range: str | None,
                            ocr_mode: str = "off") -> dict:
     ext = _file_ext(uploaded_file.name)
+    if ext != "pdf":
+        # Диапазон страниц поддержан только для PDF: convert_with_markitdown
+        # на непустом page_range для DOCX/XLSX/PPTX бросает ValueError.
+        page_range = None
     display_range = page_range or "all"
     ocr_status = None
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
