@@ -100,6 +100,11 @@ def test_emphasis_with_inner_space_still_works(tmp_path):
                                                tmp_path)
 
 
+# ПРАВКА #36: +? вместо *? — «****» не матчится с пустым содержимым и не пропадает
+def test_four_asterisks_survive_literally(tmp_path):
+    assert "****" in _text("Тут **** четыре звезды.", tmp_path)
+
+
 # ПРАВКА #37: экранированные спецсимволы выводятся буквально
 def test_escaped_asterisks_are_literal(tmp_path):
     runs = _runs(r"Звёздочки: \*звёздочки вокруг слова\* — курсива нет.",
