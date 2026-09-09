@@ -47,9 +47,11 @@ def clear_body(doc):
     body = doc.element.body
     to_remove = [c for c in body
                  if (c.tag.split('}')[-1] if '}' in c.tag else c.tag) != 'sectPr']
+    # ПРАВКА #43: пустой w:p здесь не нужен — python-docx сам вставляет
+    # абзацы перед sectPr, а лишний давал провал над первым заголовком
+    # в дополнение к его собственному отступу 24pt.
     for el in to_remove:
         body.remove(el)
-    body.insert(0, OxmlElement('w:p'))
 
 
 def set_cell_shading(cell, hex_color):

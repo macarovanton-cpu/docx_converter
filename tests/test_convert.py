@@ -326,3 +326,24 @@ def test_signature_block_recognised_with_any_asterisks(md, tmp_path):
     top = pPr.find(qn('w:pBdr')).find(qn('w:top'))
     assert top.get(qn('w:color')) == "D04514"
     assert pPr.find(qn('w:keepLines')) is not None
+
+
+# =============================================================================
+# ПРАВКА #43: нет пустого абзаца перед первым заголовком
+# =============================================================================
+
+TEMPLATE = Path(__file__).resolve().parents[1] / "template.docx"
+needs_template = pytest.mark.skipif(
+    not TEMPLATE.exists(),
+    reason="template.docx лежит на Google Drive и в репозиторий не входит")
+
+
+@needs_template
+def test_no_empty_paragraph_before_first_heading(tmp_path):
+    """clear_body больше не вставляет пустой w:p — H1 идёт первым абзацем
+    тела и над ним только его собственный отступ 24pt."""
+    out = tmp_path / "tpl.docx"
+    convert_md_to_docx("# Заголовок\n\nТекст абзаца.", str(out),
+                       template_path=str(TEMPLATE))
+    doc = Document(str(out))
+    assert doc.paragraphs[0].text == "Заголовок"
