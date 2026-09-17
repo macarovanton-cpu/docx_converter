@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# ПРАВКА #52: таймауты, чтобы зависший ocrmypdf не держал Streamlit-воркер вечно.
+OCR_TIMEOUT_SEC = 300
+DEPENDENCY_TIMEOUT_SEC = 15
+
 
 def ocr_pdf_to_searchable_pdf(
     input_pdf_path: str,
@@ -49,7 +53,17 @@ def ocr_pdf_to_searchable_pdf(
             capture_output=True,
             text=True,
             errors="replace",
+            timeout=OCR_TIMEOUT_SEC,
         )
+    except subprocess.TimeoutExpired as exc:
+        # ПРАВКА #52: зомби не остаётся — subprocess.run при таймауте сам делает
+        # kill() + communicate() до того, как бросить TimeoutExpired.
+        raise RuntimeError(
+            f"OCR не завершился за {OCR_TIMEOUT_SEC} с и был остановлен. "
+            "Файл слишком тяжёлый или ocrmypdf завис — попробуйте меньший "
+            "диапазон страниц.\n"
+            f"Command: {_format_command(exc.cmd)}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             _format_subprocess_error("OCRmyPDF failed", exc)
@@ -88,7 +102,10 @@ def check_ocr_dependencies() -> dict[str, dict[str, Any]]:
     }
 
 
-def _check_command_version(command: list[str]) -> dict[str, Any]:
+def _check_command_version(
+    command: list[str],
+    timeout: float = DEPENDENCY_TIMEOUT_SEC,
+) -> dict[str, Any]:
     try:
         result = subprocess.run(
             command,
@@ -96,7 +113,19 @@ def _check_command_version(command: list[str]) -> dict[str, Any]:
             capture_output=True,
             text=True,
             errors="replace",
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        # ПРАВКА #52: контракт «не бросать» сохраняется, процесс уже снят внутри run().
+        return {
+            "ok": False,
+            "version": None,
+            "error": (
+                f"Проверка зависимости не ответила за {timeout:g} с: "
+                f"{_format_command(command)}"
+            ),
+            "command": command,
+        }
     except subprocess.CalledProcessError as exc:
         return {
             "ok": False,
