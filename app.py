@@ -50,6 +50,17 @@ def get_template(use_drive, drive_file_id, local_path):
     return None
 
 
+def _drive_secrets_available() -> bool:
+    """Нет secrets.toml — работаем без Google Drive, а не падаем.
+
+    StreamlitSecretNotFoundError — подкласс FileNotFoundError.
+    """
+    try:
+        return "gcp_service_account" in st.secrets
+    except FileNotFoundError:
+        return False
+
+
 def _file_ext(filename: str) -> str:
     return filename.lower().rsplit('.', 1)[-1] if '.' in filename else ''
 
@@ -61,6 +72,15 @@ def _normalize_page_range(range_text: str | None) -> str | None:
     if not value or value.lower() in ("all", "все"):
         return None
     return value
+
+
+def _decode_md_upload(data: bytes) -> str:
+    """utf-8-sig срезает BOM: без этого первый '# Title' не распознаётся
+    как H1, cp1251 — откат для файлов из Windows-редакторов."""
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1251", errors="replace")
 
 
 def _safe_md_filename(filename: str) -> str:
@@ -213,6 +233,10 @@ def _display_ocr_candidate_status(uploaded_file, ext: str, ocr_mode: str,
 def _convert_uploaded_file(uploaded_file, page_range: str | None,
                            ocr_mode: str = "off") -> dict:
     ext = _file_ext(uploaded_file.name)
+    if ext != "pdf":
+        # Диапазон страниц поддержан только для PDF: convert_with_markitdown
+        # на непустом page_range для DOCX/XLSX/PPTX бросает ValueError.
+        page_range = None
     display_range = page_range or "all"
     ocr_status = None
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
@@ -299,7 +323,7 @@ def render_md_to_docx_mode():
             upl_md = st.file_uploader("MD файл", type=["md", "txt"],
                                       label_visibility="collapsed", key="upl_md")
             if upl_md:
-                md_text = upl_md.read().decode("utf-8")
+                md_text = _decode_md_upload(upl_md.read())
                 st.success(
                     f"Загружен: **{upl_md.name}** · {len(md_text)} символов")
                 with st.expander("👁 Превью", expanded=False):
@@ -363,7 +387,7 @@ def render_md_to_docx_mode():
 
         if btn and md_text.strip():
             with st.spinner("Формирую документ..."):
-                use_drive = "gcp_service_account" in st.secrets
+                use_drive = _drive_secrets_available()
                 template_path = get_template(
                     use_drive=use_drive,
                     drive_file_id=config["drive_id"],
