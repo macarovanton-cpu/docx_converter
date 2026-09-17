@@ -477,6 +477,13 @@ def split_table_row(line):
 def is_requisites_block(text):
     return bool(re.match(r'^\*\*(Кому|От кого|Кому:|От кого:)', text))
 
+# ПРАВКА #57: дата и исходящий номер письма. Регистрозависимо — как у
+# is_requisites_block, иначе «дата» в начале обычного абзаца станет шапкой.
+_KOMU_LABEL_RE = re.compile(r'^\*\*(?:Кому|От кого)\s*:?\*\*:?\s*')
+
+def is_letter_meta_block(text):
+    return bool(re.match(r'^\*\*(?:Дата|Исх\.?)\s*:?\*\*', text))
+
 def is_signature_block(text):
     # ПРАВКА #42: ^\** вместо ^\*? — одна звёздочка не покрывала «**С уважением,**»
     return bool(re.match(r'^\**С уважением', text))
@@ -772,6 +779,72 @@ def add_callout_box(doc, text, content_width_cm, style=None):
                           style['callout_text'], style=style)
     for r in p.runs:
         r.bold = True
+
+
+def add_letter_header(doc, meta, komu, content_width_cm, style):
+    """
+    ПРАВКА #57: шапка письма — безрамочная таблица 1x2. Слева дата и исходящий
+    номер с тонкой линией под ними, справа адресат; оба блока на одном уровне
+    по вертикали. Линия рисуется границей абзаца, а не ячейки, поэтому идёт
+    ровно по ширине левой колонки, а не через всю страницу.
+    Любая из половин может отсутствовать — ячейка останется пустой.
+    """
+    table = doc.add_table(rows=1, cols=2)
+    table.autofit = False   # иначе Word разложит колонки по содержимому
+    set_table_width_dxa(table, content_width_cm)
+    set_table_no_spacing(table)
+
+    widths = [style['header_left_cm'], content_width_cm - style['header_left_cm']]
+    for cell, width_cm in zip(table.rows[0].cells, widths):
+        set_cell_no_borders(cell)
+        tcPr = cell._tc.get_or_add_tcPr()
+        existing_w = tcPr.find(qn('w:tcW'))
+        if existing_w is not None:
+            tcPr.remove(existing_w)
+        tcW = OxmlElement('w:tcW')
+        tcW.set(qn('w:w'), str(int(width_cm * 567)))
+        tcW.set(qn('w:type'), 'dxa')
+        insert_in_order(tcPr, tcW)
+        # нулевые поля ячейки: иначе адресат встанет на 2 мм внутрь от правого
+        # поля страницы и разойдётся с краем текста
+        tcMar = OxmlElement('w:tcMar')
+        # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+        for side in ['top', 'left', 'bottom', 'right']:
+            node = OxmlElement(f'w:{side}')
+            node.set(qn('w:w'), '0')
+            node.set(qn('w:type'), 'dxa')
+            tcMar.append(node)
+        insert_in_order(tcPr, tcMar)
+
+    for cell, text, align, rule in [
+            (table.rows[0].cells[0], meta, WD_ALIGN_PARAGRAPH.LEFT, True),
+            (table.rows[0].cells[1], komu, WD_ALIGN_PARAGRAPH.RIGHT, False)]:
+        if not text:
+            continue
+        p = cell.paragraphs[0]
+        p.paragraph_format.alignment   = align
+        p.paragraph_format.space_after = Pt(0)
+        if rule:
+            add_paragraph_border(p, 'bottom', style['rule_color'], 4, space=4)
+        for i, line in enumerate(text.split('\n')):
+            line = line.strip()
+            if not line: continue
+            if i > 0: p.add_run().add_break()
+            parse_inline_markdown(p, line, style['body_font'],
+                                  style['body_size'], style['text_color'],
+                                  style=style)
+
+
+def _pop_block(blocks, match):
+    """ПРАВКА #57: вынимает первый подходящий блок из списка.
+
+    Шапка собирается из двух markdown-блоков, поэтому они выбираются до
+    основного цикла — так в цикле не появляется состояния «мету видели, ждём
+    Кому», которое пришлось бы тащить через все ветки."""
+    for i, block in enumerate(blocks):
+        if match(block.strip()):
+            return blocks.pop(i).strip()
+    return None
 
 
 # ПРАВКА #30: компактный пустой параграф-спейсер после таблиц-блоков,
@@ -1074,8 +1147,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
     # ПРАВКА #26: bold prefix + hard break → отдельные параграфы
     # ПРАВКА #29: не резать блоки реквизитов/стадий — их префиксы ловят
     # is_requisites_block (case-sensitive) и is_stage_paragraph (IGNORECASE)
+    # ПРАВКА #57: «Дата»/«Исх» там же — иначе шапка письма разваливается на два
+    # блока и линия остаётся под одной строкой
     md_text = re.sub(
-        r'^(\*\*(?!(?:Кому|От кого|(?i:Стадия|Фаза|Шаг|Этап|ВАЖНО)))[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
+        r'^(\*\*(?!(?:Кому|От кого|Дата|Исх|(?i:Стадия|Фаза|Шаг|Этап|ВАЖНО)))[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
         r'\1\n\n',
         md_text,
         flags=re.MULTILINE,
@@ -1088,6 +1163,18 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
+
+    # ПРАВКА #57: шапка письма собирается из двух блоков, поэтому они выбираются
+    # здесь, а не в цикле. Порядок блоков в markdown значения не имеет — шапка
+    # всегда идёт первой, как и положено бланку.
+    if style['header_table']:
+        meta_block = _pop_block(blocks, is_letter_meta_block)
+        komu_block = _pop_block(blocks, is_requisites_block)
+        if komu_block:
+            komu_block = _KOMU_LABEL_RE.sub('', komu_block)
+        if meta_block or komu_block:
+            add_letter_header(doc, meta_block, komu_block, content_width_cm, style)
+            add_compact_spacer(doc)
 
     after_heading         = False
     # ПРАВКА #12: единый флаг — intro-блок только сразу после H1
