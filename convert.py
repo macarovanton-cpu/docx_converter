@@ -657,8 +657,26 @@ def add_intro_paragraph(doc, block, content_width_cm, style=None):
     """
     ПРАВКА #4: Вводный абзац после H1 — таблица-обёртка с цветной левой полосой.
     Выглядит как акцентный callout для главной мысли документа.
+    ПРАВКА #56: в письме врезки нет — тот же блок это тема письма, курсивом
+    по центру под словом «ПИСЬМО».
     """
     style = style or STYLE_PZ
+
+    if not style['intro_band']:
+        p = doc.add_paragraph()
+        p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(16)
+        set_keep_with_next(p)
+        for i, line in enumerate(block.split('\n')):
+            line = line.strip()
+            if not line: continue
+            if i > 0: p.add_run().add_break()
+            parse_inline_markdown(p, line, style['body_font'],
+                                  style['body_size'], style['text_color'],
+                                  is_italic_base=True, style=style)
+        return
+
     table = doc.add_table(rows=1, cols=1)
     table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
@@ -1104,7 +1122,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         # ── H1 ───────────────────────────────────────────────────────────────
         if block.startswith('# '):
             p = doc.add_paragraph()
-            p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
+            # ПРАВКА #56: «ПИСЬМО» в бланке стоит по центру
+            p.paragraph_format.alignment    = (WD_ALIGN_PARAGRAPH.CENTER
+                                               if style['h1_center']
+                                               else WD_ALIGN_PARAGRAPH.LEFT)
             p.paragraph_format.space_before = Pt(24)
             p.paragraph_format.space_after  = Pt(12)
             parse_inline_markdown(p, block[2:], style['head_font'],
@@ -1112,12 +1133,14 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             for r in p.runs: r.bold = True
             # ПРАВКА #14: H1 не отрывается от контента ниже
             set_keep_with_next(p)
-            dec = doc.add_paragraph()
-            dec.paragraph_format.space_before = Pt(0)
-            dec.paragraph_format.space_after  = Pt(10)
-            add_paragraph_border(dec, 'bottom', style['rule_color'], 12)
-            # ПРАВКА #14: декоративная линия тоже держится с контентом ниже
-            set_keep_with_next(dec)
+            # ПРАВКА #56: в строгом бланке декоративной линии под заголовком нет
+            if style['h1_rule']:
+                dec = doc.add_paragraph()
+                dec.paragraph_format.space_before = Pt(0)
+                dec.paragraph_format.space_after  = Pt(10)
+                add_paragraph_border(dec, 'bottom', style['rule_color'], 12)
+                # ПРАВКА #14: декоративная линия тоже держится с контентом ниже
+                set_keep_with_next(dec)
             after_heading = True
             # ПРАВКА #12: intro-блок ожидается только сразу после H1
             pending_intro_after_h1 = True
@@ -1390,12 +1413,17 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         elif is_requisites_block(block):
             pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
-            p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
+            # ПРАВКА #56: в письме адресат — обычный текст с выключкой вправо,
+            # без голубой подложки
+            p.paragraph_format.alignment    = (WD_ALIGN_PARAGRAPH.RIGHT
+                                               if style['requisites_right']
+                                               else WD_ALIGN_PARAGRAPH.LEFT)
             p.paragraph_format.space_before = Pt(10)
             p.paragraph_format.space_after  = Pt(14)
             p.paragraph_format.left_indent  = Cm(0.4)
             p.paragraph_format.right_indent = Cm(0.4)
-            add_paragraph_shading(p, style['block_fill'])
+            if style['requisites_fill']:
+                add_paragraph_shading(p, style['block_fill'])
             for i, line in enumerate(block.split('\n')):
                 line = line.strip()
                 if not line: continue
@@ -1414,15 +1442,28 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 set_keep_with_next(last_regular_paragraph)
 
             p = doc.add_paragraph()
+            # выключка остаётся LEFT и в письме: правый tab stop работает
+            # только на абзаце, не выключенном вправо
             p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_before = Pt(28)
             p.paragraph_format.space_after  = Pt(0)
-            add_paragraph_border(p, 'top', style['rule_color'], 4, space=8)
+            # ПРАВКА #56: красная линия над подписью — деталь ПЗ, не бланка
+            if style['signature_rule']:
+                add_paragraph_border(p, 'top', style['rule_color'], 4, space=8)
             # ПРАВКА #11: весь блок подписи не разрывается по страницам
             set_keep_together(p)
-            for i, line in enumerate(block.split('\n')):
-                line = line.strip()
-                if not line: continue
+
+            sig_lines = [l.strip() for l in block.split('\n') if l.strip()]
+            # ПРАВКА #56: в письме должность и фамилия стоят одной строкой —
+            # должность слева, фамилия по правой табуляции. Склейка только при
+            # трёх строках и больше («С уважением,» + должность + фамилия):
+            # при двух строках склеивать нечего, остаётся поведение ПЗ.
+            if style['signature_tab'] and len(sig_lines) >= 3:
+                p.paragraph_format.tab_stops.add_tab_stop(
+                    Cm(content_width_cm), WD_TAB_ALIGNMENT.RIGHT)
+                sig_lines = sig_lines[:-2] + [sig_lines[-2] + '\t' + sig_lines[-1]]
+
+            for i, line in enumerate(sig_lines):
                 if i > 0: p.add_run().add_break()
                 parse_inline_markdown(p, line, style['body_font'],
                                       style['body_size'], style['text_color'],
@@ -1436,15 +1477,17 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 add_intro_paragraph(doc, block, content_width_cm, style)
                 pending_intro_after_h1 = False
                 after_heading = False
-                # Добавляем пустой параграф-отступ после врезки
-                sp = doc.add_paragraph()
-                pPr = sp._p.get_or_add_pPr()
-                s = OxmlElement('w:spacing')
-                s.set(qn('w:before'), '0')
-                s.set(qn('w:after'), '120')
-                s.set(qn('w:line'), '120')
-                s.set(qn('w:lineRule'), 'exact')
-                insert_in_order(pPr, s)
+                # ПРАВКА #30: спейсер разделяет соседние w:tbl. ПРАВКА #56:
+                # в письме врезки-таблицы нет, разделять нечего.
+                if style['intro_band']:
+                    sp = doc.add_paragraph()
+                    pPr = sp._p.get_or_add_pPr()
+                    s = OxmlElement('w:spacing')
+                    s.set(qn('w:before'), '0')
+                    s.set(qn('w:after'), '120')
+                    s.set(qn('w:line'), '120')
+                    s.set(qn('w:lineRule'), 'exact')
+                    insert_in_order(pPr, s)
                 continue
 
             p = doc.add_paragraph()
