@@ -5,7 +5,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor
 
 import app
-from convert import convert_md_to_docx
+from convert import STYLES, convert_md_to_docx
 
 
 class _FakeUpload:
@@ -81,6 +81,14 @@ def test_bom_fixture_first_block_renders_as_h1(tmp_path):
     assert run.font.name == "PT Sans Narrow"
     assert run.font.size == Pt(18)
     assert run.font.color.rgb == RGBColor.from_string("015198")
+
+
+def test_every_doc_type_has_a_known_style():
+    """ПРАВКА #59: опечатка в "style" отдала бы клиенту письмо в стиле ПЗ —
+    ловим её здесь, а не в готовом документе."""
+    for name, cfg in app.DOC_TYPES.items():
+        assert "style" in cfg, f"у типа {name} нет ключа style"
+        assert cfg["style"] in STYLES, f"у типа {name} неизвестный style: {cfg['style']}"
 
 
 def test_doc_types_point_at_distinct_templates():

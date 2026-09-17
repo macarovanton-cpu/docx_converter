@@ -39,6 +39,137 @@ CONTENT_WIDTH_CM = 17.5
 
 
 # =============================================================================
+# ПРАВКА #55: ПРОФИЛИ ОФОРМЛЕНИЯ
+# =============================================================================
+# Письмо и пояснительная записка — разные документы с разными шаблонами (#54),
+# а рисовались одинаково. Профиль — плоский словарь: значения (цвет, кегль,
+# шрифт, заливка) и флаги, меняющие структуру вывода. Выбирается аргументом
+# doc_style и доезжает до функций явным параметром style, а не глобалом:
+# Streamlit обслуживает сессии потоками одного процесса, и модульная переменная
+# при двух одновременных конвертациях разных типов молча дала бы клиенту письмо
+# в стиле ПЗ.
+# Правило доступа: только style['key'], никогда style.get() — .get вернёт None,
+# и Pt(None) уронит рендер далеко от места опечатки.
+
+STYLE_PZ = {
+    # --- шрифты и кегли ---
+    'body_font':        'PT Sans',
+    'body_size':        12,
+    'body_line':        1.3,             # интерлиньяж
+    'body_after':       8,               # Pt, space_after в стиле Normal
+    'head_font':        'PT Sans Narrow',
+    'h1_size':          18,
+    'h2_size':          14,
+    'h3_size':          13,
+    'h4_size':          12,              # H4-H6 рисуются одинаково (#40)
+    'photo_size':       11,
+    'table_head_size':  11,
+    'table_cell_size':  10,
+
+    # --- цвета ---
+    'text_color':       TEXT_DARK,
+    'h1_color':         BRAND_BLUE,
+    'h2_color':         BRAND_RED,
+    'link_color':       BRAND_BLUE,
+    'accent_color':     BRAND_BLUE,      # левые полосы intro и стадий
+    'rule_color':       BRAND_RED,       # линия под H1, над подписью, под шапкой письма
+    'quote_color':      BRAND_ORANGE,
+    'quote_text':       '555555',
+    'quote_fill':       'F7F7F7',
+    'photo_color':      BRAND_ORANGE,
+    'photo_text':       '999999',
+    'photo_fill':       BG_LIGHT_ORANGE,
+    'block_fill':       BG_LIGHT_BLUE,   # реквизиты и стадии
+    'callout_fill':     'F2F6FA',
+    'callout_border':   'C5D8EC',
+    'callout_text':     BRAND_BLUE,
+    'table_head_fill':  BRAND_BLUE,
+    'table_head_text':  BRAND_WHITE,
+    'table_row_fill':   BG_TABLE_ROW,
+    'table_alt_fill':   BG_LIGHT_BLUE,   # последняя колонка 3-колоночной таблицы
+    'icon_yes':         COLOR_YES,
+    'icon_no':          COLOR_NO,
+
+    # --- декор и раскладка ---
+    'h1_center':        False,
+    'h1_rule':          True,            # декоративная линия под H1
+    'intro_band':       True,            # False → тема курсивом по центру
+    'para_indent':      0.75,            # красная строка, см
+    'requisites_fill':  True,
+    'requisites_right': False,
+    'signature_rule':   True,
+    'signature_tab':    False,           # True → должность/фамилия в одну строку
+    'header_table':     False,           # True → шапка «Дата/Исх. + Кому» таблицей
+    'header_left_cm':   6.0,             # ширина левой колонки шапки
+    'bullet_char':      '•',
+    'bullet_font':      'Symbol',
+}
+
+STYLE_LETTER = {
+    # --- шрифты и кегли: тело плотнее и мельче, чем в ПЗ ---
+    'body_font':        'PT Sans',
+    'body_size':        10.5,
+    'body_line':        1.15,
+    'body_after':       6,
+    'head_font':        'PT Sans',       # бланк без контрастных шрифтов
+    'h1_size':          12,              # «ПИСЬМО» чуть крупнее тела
+    'h2_size':          10.5,            # разделы — кегль тела, только полужирный
+    'h3_size':          10.5,
+    'h4_size':          10.5,
+    'photo_size':       10,
+    'table_head_size':  10,
+    'table_cell_size':  9.5,
+
+    # --- цвета: строгий бланк, ни одного фирменного цвета ---
+    'text_color':       '000000',
+    'h1_color':         '000000',
+    'h2_color':         '000000',
+    'link_color':       '000000',        # признак ссылки — подчёркивание
+    'accent_color':     '000000',
+    'rule_color':       '999999',
+    'quote_color':      'BBBBBB',
+    'quote_text':       '000000',
+    'quote_fill':       BRAND_WHITE,
+    'photo_color':      'BBBBBB',
+    'photo_text':       '666666',
+    'photo_fill':       BRAND_WHITE,
+    'block_fill':       BRAND_WHITE,
+    'callout_fill':     BRAND_WHITE,
+    'callout_border':   '999999',
+    'callout_text':     '000000',
+    'table_head_fill':  BRAND_WHITE,
+    'table_head_text':  '000000',
+    'table_row_fill':   BRAND_WHITE,
+    'table_alt_fill':   BRAND_WHITE,
+    'icon_yes':         '000000',
+    'icon_no':          '000000',
+
+    # --- декор и раскладка ---
+    'h1_center':        True,
+    'h1_rule':          False,
+    'intro_band':       False,
+    'para_indent':      0,               # в деловом бланке красной строки нет
+    'requisites_fill':  False,
+    'requisites_right': True,
+    'signature_rule':   False,
+    'signature_tab':    True,
+    'header_table':     True,
+    'header_left_cm':   6.0,
+    'bullet_char':      '—',
+    'bullet_font':      'PT Sans',
+}
+
+STYLES = {'pz': STYLE_PZ, 'letter': STYLE_LETTER}
+
+# ПРАВКА #55: профили обязаны иметь одинаковый набор ключей. Не assert —
+# assert вырезается под python -O, а профиль с дырой роняет рендер в
+# неочевидном месте.
+if STYLE_PZ.keys() != STYLE_LETTER.keys():
+    raise RuntimeError('ПРАВКА #55: наборы ключей профилей разошлись: '
+                       f'{sorted(STYLE_PZ.keys() ^ STYLE_LETTER.keys())}')
+
+
+# =============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =============================================================================
 
@@ -256,7 +387,10 @@ def set_run_font(run, name, size_pt, color_hex, bold=False, italic=False):
 
 # ПРАВКА #21: обработка markdown-ссылок [text](url)
 def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
-                      bold=False, italic=False):
+                      bold=False, italic=False, link_color=None):
+    # ПРАВКА #55: цвет ссылки приезжает из профиля; дефолт сохраняет поведение
+    # внешних вызовов и блока __main__
+    link_color = link_color or BRAND_BLUE
     if not url or not url.strip():
         return None
     url = _unshield_escapes(url.strip())            # ПРАВКА #37
@@ -281,7 +415,7 @@ def add_hyperlink_run(paragraph, url, text, font_name='PT Sans', font_size=12,
     if italic:
         rPr.append(OxmlElement('w:i'))
     color_el = OxmlElement('w:color')
-    color_el.set(qn('w:val'), BRAND_BLUE)
+    color_el.set(qn('w:val'), link_color)
     rPr.append(color_el)
     sz = OxmlElement('w:sz')
     sz.set(qn('w:val'), str(font_size * 2))
@@ -342,6 +476,13 @@ def split_table_row(line):
 
 def is_requisites_block(text):
     return bool(re.match(r'^\*\*(Кому|От кого|Кому:|От кого:)', text))
+
+# ПРАВКА #57: дата и исходящий номер письма. Регистрозависимо — как у
+# is_requisites_block, иначе «дата» в начале обычного абзаца станет шапкой.
+_KOMU_LABEL_RE = re.compile(r'^\*\*(?:Кому|От кого)\s*:?\*\*:?\s*')
+
+def is_letter_meta_block(text):
+    return bool(re.match(r'^\*\*(?:Дата|Исх\.?)\s*:?\*\*', text))
 
 def is_signature_block(text):
     # ПРАВКА #42: ^\** вместо ^\*? — одна звёздочка не покрывала «**С уважением,**»
@@ -420,9 +561,14 @@ def _missing_image_text(alt, src):
 
 def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
                           font_color=TEXT_DARK, is_italic_base=False,
-                          images=None, content_width_cm=None):
+                          images=None, content_width_cm=None, style=None):
     """Обрабатывает ***жирный-курсив***, **жирный**, *курсив*, [ссылки](url)
-    и инлайн-картинки ![alt](src) (ПРАВКА #32)."""
+    и инлайн-картинки ![alt](src) (ПРАВКА #32).
+
+    ПРАВКА #55: style нужен здесь ровно для одного — цвета ссылки, который
+    иначе не доехал бы до add_hyperlink_run. Шрифт, кегль и цвет текста
+    функция и так принимает аргументами, профиль для них не нужен."""
+    link_color = (style or STYLE_PZ)['link_color']
     text = _shield_escapes(text)                    # ПРАВКА #37: \* \[ \] → PUA, до разбиения по ссылкам
     text = re.sub(r'\\([.\-+_)(:!=#|>`])', r'\1', text)  # ПРАВКА #24 + #37: раскрытие markdown-экранирования \X → X
     # ПРАВКА #21: сначала разбиваем по ссылкам [text](url)
@@ -466,7 +612,7 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
             link_url = _unshield_escapes(m.group(2).strip())   # ПРАВКА #37
             if link_url:
                 add_hyperlink_run(paragraph, link_url, link_text,
-                                  font_name, font_size)
+                                  font_name, font_size, link_color=link_color)
             else:
                 _parse_bold_italic(paragraph, link_text, font_name,
                                    font_size, font_color, is_italic_base)
@@ -476,7 +622,7 @@ def parse_inline_markdown(paragraph, text, font_name='PT Sans', font_size=12,
             # ПРАВКА #38: текст автоссылки — адрес без угловых скобок
             auto_url = _unshield_escapes(ma.group(1) or ma.group(2))   # ПРАВКА #37
             add_hyperlink_run(paragraph, auto_url, auto_url,
-                              font_name, font_size)
+                              font_name, font_size, link_color=link_color)
         else:
             _parse_bold_italic(paragraph, segment, font_name,
                                font_size, font_color, is_italic_base)
@@ -514,11 +660,30 @@ def _add_inline_image(doc, img_bytes, content_width_cm):
 # СПЕЦИАЛЬНЫЕ БЛОКИ-КОНСТРУКТОРЫ
 # =============================================================================
 
-def add_intro_paragraph(doc, block, content_width_cm):
+def add_intro_paragraph(doc, block, content_width_cm, style=None):
     """
     ПРАВКА #4: Вводный абзац после H1 — таблица-обёртка с цветной левой полосой.
     Выглядит как акцентный callout для главной мысли документа.
+    ПРАВКА #56: в письме врезки нет — тот же блок это тема письма, курсивом
+    по центру под словом «ПИСЬМО».
     """
+    style = style or STYLE_PZ
+
+    if not style['intro_band']:
+        p = doc.add_paragraph()
+        p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(16)
+        set_keep_with_next(p)
+        for i, line in enumerate(block.split('\n')):
+            line = line.strip()
+            if not line: continue
+            if i > 0: p.add_run().add_break()
+            parse_inline_markdown(p, line, style['body_font'],
+                                  style['body_size'], style['text_color'],
+                                  is_italic_base=True, style=style)
+        return
+
     table = doc.add_table(rows=1, cols=1)
     table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
@@ -538,7 +703,7 @@ def add_intro_paragraph(doc, block, content_width_cm):
             bdr.set(qn('w:val'), 'single')
             bdr.set(qn('w:sz'), '18')   # ~2.25pt
             bdr.set(qn('w:space'), '4')
-            bdr.set(qn('w:color'), BRAND_BLUE)
+            bdr.set(qn('w:color'), style['accent_color'])
         else:
             bdr.set(qn('w:val'), 'none')
             bdr.set(qn('w:sz'), '0')
@@ -561,28 +726,30 @@ def add_intro_paragraph(doc, block, content_width_cm):
     p.paragraph_format.space_after = Pt(0)
     # ПРАВКА #1: межстрочный 1.3
     p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-    p.paragraph_format.line_spacing      = 1.3
+    p.paragraph_format.line_spacing      = style['body_line']
 
     lines = block.split('\n')
     for i, line in enumerate(lines):
         line = line.strip()
         if not line: continue
         if i > 0: p.add_run().add_break()
-        parse_inline_markdown(p, line)
+        parse_inline_markdown(p, line, style['body_font'], style['body_size'],
+                              style['text_color'], style=style)
 
 
-def add_callout_box(doc, text, content_width_cm):
+def add_callout_box(doc, text, content_width_cm, style=None):
     """
     ПРАВКА #6: Callout-врезка !! текст !! — таблица с заливкой и бордером.
     Используется для формул, ключевых выводов, важных цифр.
     """
+    style = style or STYLE_PZ
     clean = text.strip('!').strip()
     table = doc.add_table(rows=1, cols=1)
     table.autofit = False   # ПРАВКА #46: allow_autofit в python-docx нет
     set_table_width_dxa(table, content_width_cm)
 
     cell = table.rows[0].cells[0]
-    set_cell_shading(cell, 'F2F6FA')   # очень лёгкий голубой
+    set_cell_shading(cell, style['callout_fill'])
 
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
@@ -591,7 +758,7 @@ def add_callout_box(doc, text, content_width_cm):
         bdr = OxmlElement(f'w:{side}')
         bdr.set(qn('w:val'), 'single')
         bdr.set(qn('w:sz'), '4')     # 0.5pt
-        bdr.set(qn('w:color'), 'C5D8EC')
+        bdr.set(qn('w:color'), style['callout_border'])
         tcBorders.append(bdr)
     # Акцент — левая граница чуть толще
     insert_in_order(tcPr, tcBorders)
@@ -608,9 +775,76 @@ def add_callout_box(doc, text, content_width_cm):
     p = cell.paragraphs[0]
     p.paragraph_format.alignment  = WD_ALIGN_PARAGRAPH.LEFT
     p.paragraph_format.space_after = Pt(0)
-    parse_inline_markdown(p, clean, 'PT Sans', 12, BRAND_BLUE)
+    parse_inline_markdown(p, clean, style['body_font'], style['body_size'],
+                          style['callout_text'], style=style)
     for r in p.runs:
         r.bold = True
+
+
+def add_letter_header(doc, meta, komu, content_width_cm, style):
+    """
+    ПРАВКА #57: шапка письма — безрамочная таблица 1x2. Слева дата и исходящий
+    номер с тонкой линией под ними, справа адресат; оба блока на одном уровне
+    по вертикали. Линия рисуется границей абзаца, а не ячейки, поэтому идёт
+    ровно по ширине левой колонки, а не через всю страницу.
+    Любая из половин может отсутствовать — ячейка останется пустой.
+    """
+    table = doc.add_table(rows=1, cols=2)
+    table.autofit = False   # иначе Word разложит колонки по содержимому
+    set_table_width_dxa(table, content_width_cm)
+    set_table_no_spacing(table)
+
+    widths = [style['header_left_cm'], content_width_cm - style['header_left_cm']]
+    for cell, width_cm in zip(table.rows[0].cells, widths):
+        set_cell_no_borders(cell)
+        tcPr = cell._tc.get_or_add_tcPr()
+        existing_w = tcPr.find(qn('w:tcW'))
+        if existing_w is not None:
+            tcPr.remove(existing_w)
+        tcW = OxmlElement('w:tcW')
+        tcW.set(qn('w:w'), str(int(width_cm * 567)))
+        tcW.set(qn('w:type'), 'dxa')
+        insert_in_order(tcPr, tcW)
+        # нулевые поля ячейки: иначе адресат встанет на 2 мм внутрь от правого
+        # поля страницы и разойдётся с краем текста
+        tcMar = OxmlElement('w:tcMar')
+        # ПРАВКА #51: порядок сторон задан схемой — top, left, bottom, right
+        for side in ['top', 'left', 'bottom', 'right']:
+            node = OxmlElement(f'w:{side}')
+            node.set(qn('w:w'), '0')
+            node.set(qn('w:type'), 'dxa')
+            tcMar.append(node)
+        insert_in_order(tcPr, tcMar)
+
+    for cell, text, align, rule in [
+            (table.rows[0].cells[0], meta, WD_ALIGN_PARAGRAPH.LEFT, True),
+            (table.rows[0].cells[1], komu, WD_ALIGN_PARAGRAPH.RIGHT, False)]:
+        if not text:
+            continue
+        p = cell.paragraphs[0]
+        p.paragraph_format.alignment   = align
+        p.paragraph_format.space_after = Pt(0)
+        if rule:
+            add_paragraph_border(p, 'bottom', style['rule_color'], 4, space=4)
+        for i, line in enumerate(text.split('\n')):
+            line = line.strip()
+            if not line: continue
+            if i > 0: p.add_run().add_break()
+            parse_inline_markdown(p, line, style['body_font'],
+                                  style['body_size'], style['text_color'],
+                                  style=style)
+
+
+def _pop_block(blocks, match):
+    """ПРАВКА #57: вынимает первый подходящий блок из списка.
+
+    Шапка собирается из двух markdown-блоков, поэтому они выбираются до
+    основного цикла — так в цикле не появляется состояния «мету видели, ждём
+    Кому», которое пришлось бы тащить через все ветки."""
+    for i, block in enumerate(blocks):
+        if match(block.strip()):
+            return blocks.pop(i).strip()
+    return None
 
 
 # ПРАВКА #30: компактный пустой параграф-спейсер после таблиц-блоков,
@@ -626,7 +860,7 @@ def add_compact_spacer(doc):
     insert_in_order(pPr, s)
 
 
-def add_table_cell_content(p, text, font_size=10):
+def add_table_cell_content(p, text, font_size=10, style=None):
     """
     ПРАВКА #8: Добавляет ✓/✗ перед значениями «Да»/«Нет» в ячейках таблицы.
     Применяется для любой сравнительной таблицы автоматически.
@@ -634,10 +868,12 @@ def add_table_cell_content(p, text, font_size=10):
     ПРАВКА #34: иконка ставится ПЕРЕД текстом, сам текст ячейки не вырезается —
     «Да — 36 месяцев» → «✓ Да — 36 месяцев», «Нет данных» → «✗ Нет данных».
     """
+    style = style or STYLE_PZ
     stripped = text.strip()
 
     if not ENABLE_TABLE_SYMBOLS:
-        parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
+        parse_inline_markdown(p, stripped, style['body_font'], font_size,
+                              style['text_color'], style=style)
         return
 
     # Проверяем начало ячейки на Да/Нет/Отсутствует
@@ -645,9 +881,10 @@ def add_table_cell_content(p, text, font_size=10):
     if m:
         is_yes = m.group(1).lower() == 'да'
         icon_run = p.add_run('✓ ' if is_yes else '✗ ')
-        set_run_font(icon_run, 'PT Sans', font_size,
-                     COLOR_YES if is_yes else COLOR_NO, bold=True)
-    parse_inline_markdown(p, stripped, 'PT Sans', font_size, TEXT_DARK)
+        set_run_font(icon_run, style['body_font'], font_size,
+                     style['icon_yes'] if is_yes else style['icon_no'], bold=True)
+    parse_inline_markdown(p, stripped, style['body_font'], font_size,
+                          style['text_color'], style=style)
 
 
 # =============================================================================
@@ -671,12 +908,14 @@ def enable_auto_hyphenation(doc):
 # ПРАВКА #13: НУМЕРАЦИЯ СПИСКОВ
 # =============================================================================
 
-def ensure_list_numbering(doc):
+def ensure_list_numbering(doc, style=None):
     """
     ПРАВКА #13: гарантирует наличие в numbering.xml кастомных определений
     для bullet (•) и numbered (1. 2. 3.) списков.
     Возвращает (bullet_num_id, numbered_num_id).
+    ПРАВКА #55: глиф маркера и его шрифт берутся из профиля.
     """
+    style = style or STYLE_PZ
 
     BULLET_ABSTRACT_ID = 100
     NUMBERED_ABSTRACT_ID = 101
@@ -710,13 +949,17 @@ def ensure_list_numbering(doc):
 
     numbering_elem = numbering_part.element
 
-    # Проверяем, не созданы ли уже наши определения
-    existing_abstract = {
-        int(a.get(qn('w:abstractNumId')))
-        for a in numbering_elem.findall(qn('w:abstractNum'))
-    }
-    if BULLET_ABSTRACT_ID in existing_abstract and NUMBERED_ABSTRACT_ID in existing_abstract:
-        return BULLET_NUM_ID, NUMBERED_NUM_ID
+    # ПРАВКА #58: если определение с нашим id уже пришло из numbering.xml
+    # шаблона, снимаем его и создаём заново. Раньше функция в этом случае
+    # молча возвращалась, и письмо получило бы маркер шаблона вместо длинного
+    # тире из профиля — поймать такое можно было бы только глазами в Word.
+    # У template.docx id идут 0-28, так что сегодня это холостой проход.
+    for existing_el in numbering_elem.findall(qn('w:abstractNum')):
+        if int(existing_el.get(qn('w:abstractNumId'))) in (BULLET_ABSTRACT_ID,
+                                                           NUMBERED_ABSTRACT_ID):
+            numbering_elem.remove(existing_el)
+
+    existing_abstract = set()
 
     # --- Bullet abstractNum ---
     if BULLET_ABSTRACT_ID not in existing_abstract:
@@ -731,7 +974,7 @@ def ensure_list_numbering(doc):
         numFmt.set(qn('w:val'), 'bullet')
         lvl.append(numFmt)
         lvlText = OxmlElement('w:lvlText')
-        lvlText.set(qn('w:val'), '•')
+        lvlText.set(qn('w:val'), style['bullet_char'])
         lvl.append(lvlText)
         lvlJc = OxmlElement('w:lvlJc')
         lvlJc.set(qn('w:val'), 'left')
@@ -744,8 +987,8 @@ def ensure_list_numbering(doc):
         lvl.append(pPr)
         rPr = OxmlElement('w:rPr')
         rFonts = OxmlElement('w:rFonts')
-        rFonts.set(qn('w:ascii'), 'Symbol')
-        rFonts.set(qn('w:hAnsi'), 'Symbol')
+        rFonts.set(qn('w:ascii'), style['bullet_font'])
+        rFonts.set(qn('w:hAnsi'), style['bullet_font'])
         rFonts.set(qn('w:hint'), 'default')
         rPr.append(rFonts)
         lvl.append(rPr)
@@ -845,7 +1088,13 @@ def set_paragraph_numbering(paragraph, num_id, ilvl=0):
 # ОСНОВНАЯ ЛОГИКА КОНВЕРТАЦИИ
 # =============================================================================
 
-def convert_md_to_docx(md_text, output_filename, template_path=None, images=None):
+def convert_md_to_docx(md_text, output_filename, template_path=None, images=None,
+                       doc_style='pz'):
+
+    # ПРАВКА #55: профиль оформления выбирается типом документа. Неизвестный
+    # ключ роняет конвертацию громко — молча отрисованное не тем стилем
+    # клиентское письмо хуже ошибки в UI.
+    style = STYLES[doc_style]
 
     # ПРАВКА #28: нормализация переводов строк — CRLF/CR ломали split('\n\n') и regex #26
     md_text = md_text.replace('\r\n', '\n').replace('\r', '\n')
@@ -879,19 +1128,19 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
     # --- Базовый стиль Normal ---
     sn = doc.styles['Normal']
-    sn.font.name      = 'PT Sans'
-    sn.font.size      = Pt(12)
-    sn.font.color.rgb = RGBColor.from_string(TEXT_DARK)
+    sn.font.name      = style['body_font']
+    sn.font.size      = Pt(style['body_size'])
+    sn.font.color.rgb = RGBColor.from_string(style['text_color'])
     sn.paragraph_format.alignment         = WD_ALIGN_PARAGRAPH.LEFT  # ПРАВКА #27: justify → left для читаемости с латинской терминологией
     sn.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-    sn.paragraph_format.line_spacing      = 1.3   # ПРАВКА #1: было 1.2
-    sn.paragraph_format.space_after       = Pt(8)  # ПРАВКА #2: было Pt(6)
+    sn.paragraph_format.line_spacing      = style['body_line']   # ПРАВКА #1: было 1.2
+    sn.paragraph_format.space_after       = Pt(style['body_after'])  # ПРАВКА #2: было Pt(6)
 
     # ПРАВКА #18: включаем автоматические переносы слов
     enable_auto_hyphenation(doc)
 
     # ПРАВКА #13: регистрируем numbering для bullet/numbered списков
-    bullet_num_id, numbered_num_id = ensure_list_numbering(doc)
+    bullet_num_id, numbered_num_id = ensure_list_numbering(doc, style)
 
     # ПРАВКА #23: позиционирование картинок по тексту
     _images_dict = {}
@@ -902,8 +1151,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
     # ПРАВКА #26: bold prefix + hard break → отдельные параграфы
     # ПРАВКА #29: не резать блоки реквизитов/стадий — их префиксы ловят
     # is_requisites_block (case-sensitive) и is_stage_paragraph (IGNORECASE)
+    # ПРАВКА #57: «Дата»/«Исх» там же — иначе шапка письма разваливается на два
+    # блока и линия остаётся под одной строкой
     md_text = re.sub(
-        r'^(\*\*(?!(?:Кому|От кого|(?i:Стадия|Фаза|Шаг|Этап|ВАЖНО)))[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
+        r'^(\*\*(?!(?:Кому|От кого|Дата|Исх|(?i:Стадия|Фаза|Шаг|Этап|ВАЖНО)))[^*\n]{1,100}?:\*\*)  +\n(?!\n)',
         r'\1\n\n',
         md_text,
         flags=re.MULTILINE,
@@ -916,6 +1167,18 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
 
     # --- Парсинг блоков Markdown ---
     blocks = md_text.split('\n\n')
+
+    # ПРАВКА #57: шапка письма собирается из двух блоков, поэтому они выбираются
+    # здесь, а не в цикле. Порядок блоков в markdown значения не имеет — шапка
+    # всегда идёт первой, как и положено бланку.
+    if style['header_table']:
+        meta_block = _pop_block(blocks, is_letter_meta_block)
+        komu_block = _pop_block(blocks, is_requisites_block)
+        if komu_block:
+            komu_block = _KOMU_LABEL_RE.sub('', komu_block)
+        if meta_block or komu_block:
+            add_letter_header(doc, meta_block, komu_block, content_width_cm, style)
+            add_compact_spacer(doc)
 
     after_heading         = False
     # ПРАВКА #12: единый флаг — intro-блок только сразу после H1
@@ -950,19 +1213,25 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         # ── H1 ───────────────────────────────────────────────────────────────
         if block.startswith('# '):
             p = doc.add_paragraph()
-            p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
+            # ПРАВКА #56: «ПИСЬМО» в бланке стоит по центру
+            p.paragraph_format.alignment    = (WD_ALIGN_PARAGRAPH.CENTER
+                                               if style['h1_center']
+                                               else WD_ALIGN_PARAGRAPH.LEFT)
             p.paragraph_format.space_before = Pt(24)
             p.paragraph_format.space_after  = Pt(12)
-            parse_inline_markdown(p, block[2:], 'PT Sans Narrow', 18, BRAND_BLUE)
+            parse_inline_markdown(p, block[2:], style['head_font'],
+                                  style['h1_size'], style['h1_color'], style=style)
             for r in p.runs: r.bold = True
             # ПРАВКА #14: H1 не отрывается от контента ниже
             set_keep_with_next(p)
-            dec = doc.add_paragraph()
-            dec.paragraph_format.space_before = Pt(0)
-            dec.paragraph_format.space_after  = Pt(10)
-            add_paragraph_border(dec, 'bottom', BRAND_RED, 12)
-            # ПРАВКА #14: декоративная линия тоже держится с контентом ниже
-            set_keep_with_next(dec)
+            # ПРАВКА #56: в строгом бланке декоративной линии под заголовком нет
+            if style['h1_rule']:
+                dec = doc.add_paragraph()
+                dec.paragraph_format.space_before = Pt(0)
+                dec.paragraph_format.space_after  = Pt(10)
+                add_paragraph_border(dec, 'bottom', style['rule_color'], 12)
+                # ПРАВКА #14: декоративная линия тоже держится с контентом ниже
+                set_keep_with_next(dec)
             after_heading = True
             # ПРАВКА #12: intro-блок ожидается только сразу после H1
             pending_intro_after_h1 = True
@@ -975,7 +1244,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             p.paragraph_format.space_before = Pt(20)
             p.paragraph_format.space_after  = Pt(8)
             # ПРАВКА #3: H2 остаётся цветным 14pt
-            parse_inline_markdown(p, block[3:], 'PT Sans Narrow', 14, BRAND_RED)
+            parse_inline_markdown(p, block[3:], style['head_font'],
+                                  style['h2_size'], style['h2_color'], style=style)
             for r in p.runs: r.bold = True
             # ПРАВКА #14: H2 не отрывается от контента ниже
             set_keep_with_next(p)
@@ -990,7 +1260,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             p.paragraph_format.space_after  = Pt(6)
             # ПРАВКА #3: H3 — чёрный bold (отличается от H2 цветом и размером)
             # ПРАВКА #15: размер 11pt → 13pt, чтобы H3 был крупнее тела (12pt)
-            parse_inline_markdown(p, block[4:], 'PT Sans Narrow', 13, TEXT_DARK)
+            parse_inline_markdown(p, block[4:], style['head_font'],
+                                  style['h3_size'], style['text_color'], style=style)
             for r in p.runs: r.bold = True
             # ПРАВКА #14: H3 не отрывается от контента ниже
             set_keep_with_next(p)
@@ -1006,7 +1277,8 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             # ПРАВКА #40: H5 и H6 оформляются как H4 — в деловых документах
             # глубже четвёртого уровня не ходят. Без декоративных линий.
             parse_inline_markdown(p, re.sub(r'^#{4,6} ', '', block),
-                                  'PT Sans Narrow', 12, TEXT_DARK)
+                                  style['head_font'], style['h4_size'],
+                                  style['text_color'], style=style)
             for r in p.runs: r.bold = True
             set_keep_with_next(p)
             after_heading = True
@@ -1020,9 +1292,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             p.paragraph_format.left_indent  = Cm(1.8)
             p.paragraph_format.space_before = Pt(10)
             p.paragraph_format.space_after  = Pt(10)
-            add_paragraph_border(p, 'left', BRAND_ORANGE, 18, space=4)
-            add_paragraph_shading(p, 'F7F7F7')
-            parse_inline_markdown(p, clean, 'PT Sans', 12, "555555", is_italic_base=True)
+            add_paragraph_border(p, 'left', style['quote_color'], 18, space=4)
+            add_paragraph_shading(p, style['quote_fill'])
+            parse_inline_markdown(p, clean, style['body_font'], style['body_size'],
+                                  style['quote_text'], is_italic_base=True, style=style)
             last_regular_paragraph = p
             after_heading = False
 
@@ -1030,7 +1303,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         elif is_callout_block(block):
             pending_intro_after_h1 = False   # ПРАВКА #12
             # ПРАВКА #6: новый тип блока — оформляется как акцентная таблица
-            add_callout_box(doc, block, content_width_cm)
+            add_callout_box(doc, block, content_width_cm, style)
             # ПРАВКА #30: спейсер, иначе callout склеивается со следующим w:tbl
             add_compact_spacer(doc)
             after_heading = False
@@ -1050,13 +1323,16 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 p.paragraph_format.left_indent  = Cm(1.0)
                 p.paragraph_format.space_before = Pt(10)
                 p.paragraph_format.space_after  = Pt(10)
-                add_paragraph_border(p, 'left', BRAND_ORANGE, 18)
-                add_paragraph_shading(p, BG_LIGHT_ORANGE)
-                parse_inline_markdown(p, alt, 'PT Sans', 11, "999999",
-                                      is_italic_base=True)
+                add_paragraph_border(p, 'left', style['photo_color'], 18)
+                add_paragraph_shading(p, style['photo_fill'])
+                parse_inline_markdown(p, alt, style['body_font'],
+                                      style['photo_size'], style['photo_text'],
+                                      is_italic_base=True, style=style)
             else:
                 p = doc.add_paragraph()
-                parse_inline_markdown(p, _missing_image_text(alt, img_src))
+                parse_inline_markdown(p, _missing_image_text(alt, img_src),
+                                      style['body_font'], style['body_size'],
+                                      style['text_color'], style=style)
             after_heading = False
 
         # ── Плейсхолдеры фото ────────────────────────────────────────────────
@@ -1066,12 +1342,14 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             p.paragraph_format.left_indent  = Cm(1.0)
             p.paragraph_format.space_before = Pt(10)
             p.paragraph_format.space_after  = Pt(10)
-            add_paragraph_border(p, 'left', BRAND_ORANGE, 18)
-            add_paragraph_shading(p, BG_LIGHT_ORANGE)
+            add_paragraph_border(p, 'left', style['photo_color'], 18)
+            add_paragraph_shading(p, style['photo_fill'])
             # ПРАВКА #37, известный предел: маркер цитаты снимается до парсера,
             # поэтому экранированный \> внутри цитаты не восстанавливается
             parse_inline_markdown(p, block.replace('>', '').strip(),
-                                  'PT Sans', 11, "999999", is_italic_base=True)
+                                  style['body_font'], style['photo_size'],
+                                  style['photo_text'], is_italic_base=True,
+                                  style=style)
             after_heading = False
 
         # ── Стадии / ВАЖНО ───────────────────────────────────────────────────
@@ -1081,9 +1359,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             p.paragraph_format.left_indent  = Cm(0.75)
             p.paragraph_format.space_before = Pt(8)
             p.paragraph_format.space_after  = Pt(6)
-            add_paragraph_border(p, 'left', BRAND_BLUE, 12)
-            add_paragraph_shading(p, BG_LIGHT_BLUE)
-            parse_inline_markdown(p, block)
+            add_paragraph_border(p, 'left', style['accent_color'], 12)
+            add_paragraph_shading(p, style['block_fill'])
+            parse_inline_markdown(p, block, style['body_font'],
+                                  style['body_size'], style['text_color'],
+                                  style=style)
             after_heading = False
 
         # ── Списки ───────────────────────────────────────────────────────────
@@ -1103,7 +1383,10 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 p.paragraph_format.first_line_indent = Cm(-0.75)
                 p.paragraph_format.space_after       = Pt(4)
                 parse_inline_markdown(p, re.sub(r'^(\- |\* |\d{1,2}\. )', '', line),  # ПРАВКА #31: синхронно с is_num
-                                      images=_images_dict, content_width_cm=content_width_cm)  # ПРАВКА #32
+                                      style['body_font'], style['body_size'],
+                                      style['text_color'],
+                                      images=_images_dict, content_width_cm=content_width_cm,  # ПРАВКА #32
+                                      style=style)
                 last_list_paragraph = p
                 last_regular_paragraph = p
             after_heading = False
@@ -1130,7 +1413,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
             for i, h in enumerate(headers):
                 if i < len(table.rows[0].cells):
                     cell = table.rows[0].cells[i]
-                    set_cell_shading(cell, BRAND_BLUE)
+                    set_cell_shading(cell, style['table_head_fill'])
                     set_cell_margins_and_borders(cell, BORDER_LIGHT, 4)
                     # ПРАВКА #19: минимальная ширина первой колонки для длинных подписей
                     if n_cols >= 3 and i == 0:
@@ -1146,7 +1429,9 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                     p.paragraph_format.alignment   = WD_ALIGN_PARAGRAPH.CENTER
                     p.paragraph_format.space_after = Pt(0)
                     # ПРАВКА #7: шрифт 10pt → 11pt в заголовке таблицы
-                    parse_inline_markdown(p, h, 'PT Sans Narrow', 11, BRAND_WHITE)
+                    parse_inline_markdown(p, h, style['head_font'],
+                                          style['table_head_size'],
+                                          style['table_head_text'], style=style)
                     for r in p.runs: r.bold = True
 
             for row_idx, line in enumerate(lines[1:]):
@@ -1167,9 +1452,11 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                         # ПРАВКА #9: последняя колонка 3-колоночной таблицы
                         # получает фирменный голубой фон (выделяем «наш» столбец)
                         if n_cols == 3 and i == n_cols - 1:
-                            bg = BG_LIGHT_BLUE
+                            bg = style['table_alt_fill']
                         else:
-                            bg = BG_TABLE_ROW if is_even else BRAND_WHITE
+                            # BRAND_WHITE — «бумага», не фирменный цвет: в обоих
+                            # профилях это белый, ключа не заводим
+                            bg = style['table_row_fill'] if is_even else BRAND_WHITE
 
                         set_cell_shading(cell, bg)
                         set_cell_margins_and_borders(cell, BORDER_LIGHT, 4)
@@ -1186,7 +1473,7 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                         p = cell.paragraphs[0]
                         p.paragraph_format.space_after = Pt(0)
                         # ПРАВКА #8: автоматические ✓/✗ для Да/Нет/Отсутствует
-                        add_table_cell_content(p, c, font_size=10)
+                        add_table_cell_content(p, c, style['table_cell_size'], style)
 
             # ПРАВКА #35: шапка повторяется на каждой странице,
             # строка не разрывается пополам между страницами
@@ -1217,17 +1504,24 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
         elif is_requisites_block(block):
             pending_intro_after_h1 = False   # ПРАВКА #12
             p = doc.add_paragraph()
-            p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
+            # ПРАВКА #56: в письме адресат — обычный текст с выключкой вправо,
+            # без голубой подложки
+            p.paragraph_format.alignment    = (WD_ALIGN_PARAGRAPH.RIGHT
+                                               if style['requisites_right']
+                                               else WD_ALIGN_PARAGRAPH.LEFT)
             p.paragraph_format.space_before = Pt(10)
             p.paragraph_format.space_after  = Pt(14)
             p.paragraph_format.left_indent  = Cm(0.4)
             p.paragraph_format.right_indent = Cm(0.4)
-            add_paragraph_shading(p, BG_LIGHT_BLUE)
+            if style['requisites_fill']:
+                add_paragraph_shading(p, style['block_fill'])
             for i, line in enumerate(block.split('\n')):
                 line = line.strip()
                 if not line: continue
                 if i > 0: p.add_run().add_break()
-                parse_inline_markdown(p, line)
+                parse_inline_markdown(p, line, style['body_font'],
+                                      style['body_size'], style['text_color'],
+                                      style=style)
             last_regular_paragraph = p
             after_heading = False
 
@@ -1239,46 +1533,66 @@ def convert_md_to_docx(md_text, output_filename, template_path=None, images=None
                 set_keep_with_next(last_regular_paragraph)
 
             p = doc.add_paragraph()
+            # выключка остаётся LEFT и в письме: правый tab stop работает
+            # только на абзаце, не выключенном вправо
             p.paragraph_format.alignment    = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_before = Pt(28)
             p.paragraph_format.space_after  = Pt(0)
-            add_paragraph_border(p, 'top', BRAND_RED, 4, space=8)
+            # ПРАВКА #56: красная линия над подписью — деталь ПЗ, не бланка
+            if style['signature_rule']:
+                add_paragraph_border(p, 'top', style['rule_color'], 4, space=8)
             # ПРАВКА #11: весь блок подписи не разрывается по страницам
             set_keep_together(p)
-            for i, line in enumerate(block.split('\n')):
-                line = line.strip()
-                if not line: continue
+
+            sig_lines = [l.strip() for l in block.split('\n') if l.strip()]
+            # ПРАВКА #56: в письме должность и фамилия стоят одной строкой —
+            # должность слева, фамилия по правой табуляции. Склейка только при
+            # трёх строках и больше («С уважением,» + должность + фамилия):
+            # при двух строках склеивать нечего, остаётся поведение ПЗ.
+            if style['signature_tab'] and len(sig_lines) >= 3:
+                p.paragraph_format.tab_stops.add_tab_stop(
+                    Cm(content_width_cm), WD_TAB_ALIGNMENT.RIGHT)
+                sig_lines = sig_lines[:-2] + [sig_lines[-2] + '\t' + sig_lines[-1]]
+
+            for i, line in enumerate(sig_lines):
                 if i > 0: p.add_run().add_break()
-                parse_inline_markdown(p, line)
+                parse_inline_markdown(p, line, style['body_font'],
+                                      style['body_size'], style['text_color'],
+                                      style=style)
             after_heading = False
 
         # ── Обычные абзацы ────────────────────────────────────────────────────
         else:
             # ПРАВКА #4 + ПРАВКА #12: intro-блок только сразу после H1
             if pending_intro_after_h1:
-                add_intro_paragraph(doc, block, content_width_cm)
+                add_intro_paragraph(doc, block, content_width_cm, style)
                 pending_intro_after_h1 = False
                 after_heading = False
-                # Добавляем пустой параграф-отступ после врезки
-                sp = doc.add_paragraph()
-                pPr = sp._p.get_or_add_pPr()
-                s = OxmlElement('w:spacing')
-                s.set(qn('w:before'), '0')
-                s.set(qn('w:after'), '120')
-                s.set(qn('w:line'), '120')
-                s.set(qn('w:lineRule'), 'exact')
-                insert_in_order(pPr, s)
+                # ПРАВКА #30: спейсер разделяет соседние w:tbl. ПРАВКА #56:
+                # в письме врезки-таблицы нет, разделять нечего.
+                if style['intro_band']:
+                    sp = doc.add_paragraph()
+                    pPr = sp._p.get_or_add_pPr()
+                    s = OxmlElement('w:spacing')
+                    s.set(qn('w:before'), '0')
+                    s.set(qn('w:after'), '120')
+                    s.set(qn('w:line'), '120')
+                    s.set(qn('w:lineRule'), 'exact')
+                    insert_in_order(pPr, s)
                 continue
 
             p = doc.add_paragraph()
             if not after_heading:
-                p.paragraph_format.first_line_indent = Cm(0.75)
+                p.paragraph_format.first_line_indent = Cm(style['para_indent'])
             for i, line in enumerate(block.split('\n')):
                 line = line.strip()
                 if not line: continue
                 if i > 0: p.add_run().add_break()
-                parse_inline_markdown(p, line, images=_images_dict,
-                                      content_width_cm=content_width_cm)  # ПРАВКА #32
+                parse_inline_markdown(p, line, style['body_font'],
+                                      style['body_size'], style['text_color'],
+                                      images=_images_dict,
+                                      content_width_cm=content_width_cm,  # ПРАВКА #32
+                                      style=style)
             last_regular_paragraph = p
             # ПРАВКА #20: лид-абзац (целиком жирный) держится со следующим блоком
             stripped_block = block.strip()

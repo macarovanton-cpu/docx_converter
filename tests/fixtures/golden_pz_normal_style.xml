@@ -1,0 +1,14 @@
+<w:style xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w:type="paragraph" w:default="1" w:styleId="Normal">
+  <w:name w:val="Normal"/>
+  <w:qFormat/>
+  <w:rsid w:val="00FC693F"/>
+  <w:pPr>
+    <w:spacing w:lineRule="auto" w:line="312" w:after="160"/>
+    <w:jc w:val="left"/>
+  </w:pPr>
+  <w:rPr>
+    <w:rFonts w:ascii="PT Sans" w:hAnsi="PT Sans"/>
+    <w:color w:val="1A1A1A"/>
+    <w:sz w:val="24"/>
+  </w:rPr>
+</w:style>

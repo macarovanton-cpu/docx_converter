@@ -26,7 +26,8 @@ These are the rules of engagement. Read them before touching code.
 
 ## Forbidden patterns
 
-- Do **not** change the signature `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)` — `app.py` depends on it. Extend with optional parameters only.
+- Do **not** change the signature `convert_md_to_docx(md_text, output_filename, template_path=None, images=None, doc_style='pz')` — `app.py` depends on it. Extend with optional parameters only.
+- Do **not** read profile keys with `style.get(...)` — only `style['key']`. `.get` returns `None`, and `Pt(None)` fails far from the typo.
 - Do **not** collapse the numbered `# ПРАВКА #N` edits into a general-purpose constructor. The flat numbered structure is deliberate and is what makes debugging possible.
 - Do **not** split `convert.py` into multiple files. The monolith is a conscious choice.
 - Do **not** propose a different stack (Pandoc, Quarto, mdbook). The stack is chosen and works.
@@ -42,6 +43,7 @@ streamlit run app.py
 
 Local-run gotchas (learned 2026-07-15):
 - MD→DOCX needs a template: without a `[gcp_service_account]` section in `.streamlit/secrets.toml`, Drive is unavailable and the app falls back to `C:\Users\tonik\Desktop\docx_converter\template.docx` — that file must exist, otherwise «Шаблон не найден».
+- Бланка письма локально нет: `template_letter.docx` рядом с `app.py` отсутствует, Drive выключен. Без него письмо проверяется только по ветке без шаблона — полей и колонтитула бланка в таком выводе не будет.
 
 The dev container auto-starts the app on port 8501 after attach (`postAttachCommand` in `.devcontainer/devcontainer.json`).
 
@@ -77,10 +79,36 @@ BRAND_ORANGE = "EF7F1A"   # blockquotes, photo placeholders
 TEXT_DARK    = "1A1A1A"   # body text
 ```
 
-Fonts: **PT Sans** (body, 12 pt), **PT Sans Narrow** (all headings).
 Page margins: left 2 cm, right 1.5 cm → `CONTENT_WIDTH_CM = 17.5`.
 
-## Block rendering map (convert.py)
+## Style profiles (ПРАВКА #55)
+
+Оформление задают два плоских словаря, `STYLE_PZ` и `STYLE_LETTER` (46 ключей:
+шрифты и кегли, цвета, флаги декора). Профиль выбирается аргументом
+`doc_style='pz'|'letter'` и доезжает до функций **явным параметром `style`**, а
+не модульной переменной: Streamlit обслуживает сессии потоками одного процесса,
+и глобал при двух одновременных конвертациях разных типов молча отдал бы
+клиенту письмо в стиле ПЗ. Неизвестный `doc_style` — `KeyError`, не фолбэк.
+
+Профиль получают шесть функций (`add_intro_paragraph`, `add_callout_box`,
+`add_table_cell_content`, `ensure_list_numbering`, `add_hyperlink_run` через
+`link_color`, `parse_inline_markdown` — только ради цвета ссылки) и сам
+`convert_md_to_docx`. Дефолт `style=None` → `STYLE_PZ`.
+
+- **ПЗ**: PT Sans 12 pt, PT Sans Narrow в заголовках, фирменные цвета.
+- **Письмо**: строгий бланк, PT Sans 10.5 pt, только чёрный, маркер «—»,
+  «ПИСЬМО» по центру, тема курсивом, адресат вправо, подпись с табуляцией.
+
+Новый ключ добавляется **в оба словаря** — их наборы сверяются на импорте
+явным `raise` (не `assert`: тот вырезается под `python -O`).
+
+Регрессию ПЗ ловит `tests/test_golden_pz.py` — посимвольное сравнение
+`document.xml`, `numbering.xml`, `settings.xml` и стиля `Normal` с эталоном.
+**Эталон перезаписывается только осознанно**, вместе с правкой, которая
+намеренно меняет оформление ПЗ, и диффом в ревью:
+`python tests/test_golden_pz.py --update`.
+
+## Block rendering map (convert.py, профиль ПЗ)
 
 | Markdown input | Renderer |
 |---|---|
@@ -101,11 +129,18 @@ Page margins: left 2 cm, right 1.5 cm → `CONTENT_WIDTH_CM = 17.5`.
 
 Table cells with «Да», «Нет», «Отсутствует» get automatic ✓/✗ icons.
 
+В профиле письма те же блоки рисуются иначе, плюс одна своя конструкция:
+`**Дата:**` / `**Исх.:**` и первый `**Кому:**` выбираются **пре-проходом** до
+основного цикла (`_pop_block`) и собираются в шапку — безрамочную таблицу 1×2
+(`add_letter_header`). Порядок этих блоков в markdown значения не имеет, шапка
+всегда идёт первой. Состояния «мету видели, ждём Кому» в цикле нет и заводить
+его не надо.
+
 ## Numbered edits convention
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#51. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
@@ -147,6 +182,10 @@ Add an entry to `DOC_TYPES` in `app.py`:
     "drive_id":    "<Google Drive file ID>",
     "local_path":  "<absolute local path to .docx template>",
     "output_name": "<filename stem>",
+    "style":       "pz",   # ключ из convert.STYLES — обязателен (#59)
     "hint":        "<Markdown structure hint shown in the UI>",
 },
 ```
+
+Новому оформлению нужен свой профиль в `convert.py`, а не `if` по типу
+документа в коде рендера.

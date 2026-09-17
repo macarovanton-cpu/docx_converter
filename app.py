@@ -281,16 +281,21 @@ DOC_TYPES = {
     # ПРАВКА #54: у каждого типа свой шаблон на Drive — раньше оба типа грузили
     # один file_id, и выбор типа менял только имя выходного файла и подсказку.
     # drive_id отсюда уходит в get_template -> download_template_from_drive.
+    # ПРАВКА #59: "style" выбирает профиль оформления в convert.py (#55).
+    # Ключ обязателен: отсутствие или опечатка роняет конвертацию, а не отдаёт
+    # клиенту документ, оформленный не тем стилем.
     "📄 Письмо / Сопроводительное письмо": {
         "drive_id":    "1_E7eI5PgMD50MEI8RNl8xoiWmhUsOUap",
         "local_path":  _LETTER_TEMPLATE_LOCAL,
         "output_name": "letter",
-        "hint": "Структура: заголовок `# Название`, блок `**Кому:**`, разделы `## ...`, подпись `С уважением,`"
+        "style":       "letter",
+        "hint": "Структура: `**Дата:**` и `**Исх.:**` — шапка слева, `**Кому:**` — адресат справа, `# ПИСЬМО`, тема курсивом `*О чём письмо*`, разделы `## 1. ...`, подпись `С уважением,` + должность + фамилия отдельными строками"
     },
     "📋 Пояснительная записка": {
         "drive_id":    "1FdPo8Ddo317ZYoPzraCTy5R4E72Ieqba",
         "local_path":  r"C:\Users\tonik\Desktop\docx_converter\template.docx",
         "output_name": "pz",
+        "style":       "pz",
         "hint": "Структура: заголовок `# Название`, разделы `## 1. ...`, подразделы `### 1.1. ...`, callout `!! формула !!`"
     },
 }
@@ -415,7 +420,8 @@ def render_md_to_docx_mode():
                         convert_md_to_docx(md_text=md_text,
                                            output_filename=tmp_out_path,
                                            template_path=template_path,
-                                           images=source_images)
+                                           images=source_images,
+                                           doc_style=config["style"])
 
                         with open(tmp_out_path, 'rb') as f:
                             docx_bytes = f.read()
