@@ -272,10 +272,18 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
             pass
 
 
+# ПРАВКА #54: локальный фоллбэк шаблона письма лежит рядом с app.py,
+# а не по абсолютному пути с чужого Desktop.
+_LETTER_TEMPLATE_LOCAL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "template_letter.docx")
+
 DOC_TYPES = {
+    # ПРАВКА #54: у каждого типа свой шаблон на Drive — раньше оба типа грузили
+    # один file_id, и выбор типа менял только имя выходного файла и подсказку.
+    # drive_id отсюда уходит в get_template -> download_template_from_drive.
     "📄 Письмо / Сопроводительное письмо": {
-        "drive_id":    "1FdPo8Ddo317ZYoPzraCTy5R4E72Ieqba",
-        "local_path":  r"C:\Users\tonik\Desktop\docx_converter\template.docx",
+        "drive_id":    "1_E7eI5PgMD50MEI8RNl8xoiWmhUsOUap",
+        "local_path":  _LETTER_TEMPLATE_LOCAL,
         "output_name": "letter",
         "hint": "Структура: заголовок `# Название`, блок `**Кому:**`, разделы `## ...`, подпись `С уважением,`"
     },

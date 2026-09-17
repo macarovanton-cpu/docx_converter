@@ -63,7 +63,7 @@ Seven Python modules:
 - **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Also hosts the `Файлы -> Markdown` MarkItDown layer (`convert_with_markitdown`) and PDF diagnostics (`analyze_pdf_pages`, via pypdf).
 - **`markdown_cleanup.py`** — Deterministic OCR Markdown cleanup (`cleanup_ocr_markdown`). Covered by tests but **not connected to the UI or conversion flow** — backend-only.
 - **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
-- **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Also provides `check_ocr_dependencies`.
+- **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Both runs are bounded: `OCR_TIMEOUT_SEC = 300` for ocrmypdf, `DEPENDENCY_TIMEOUT_SEC = 15` for `--version` probes. `TimeoutExpired` surfaces as a readable message, never a traceback (no manual `kill()` — `subprocess.run` already kills the child before raising). Also provides `check_ocr_dependencies`, which locates Ghostscript via `shutil.which` over platform candidates (`gswin64c` / `gswin32c` on Windows, `gs` elsewhere) — never a hardcoded name.
 - **`pdf_core.py`** — Provider-agnostic PDF → Markdown core. Public entry points: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider) -> str` and `pdf_to_markdown_with_status(...) -> (str, status_dict | None)` (the latter is what `app.py` uses — the UI shows `ocr_status`). Owns bytes→tempfile plumbing; no Streamlit, no caches. Defines the `OcrProvider` protocol (`ocr_pdf_to_markdown(pdf_bytes, page_range) -> str`) with one implementation, `OcrmypdfProvider`; `provider=None` routes through `ocr_auto_mode.convert_pdf_with_optional_ocr` unchanged. A second (cloud vision) provider is a planned separate PR.
 
 OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
@@ -121,7 +121,7 @@ Documented long-standing limits: column alignment from `:----` separators is not
 
 ## Known production limitation
 
-OCR `auto` is implemented and wired into the UI, but `ocrmypdf` is **not** in `requirements.txt` and there is no `packages.txt`. On Streamlit Community Cloud the system Tesseract/Ghostscript binaries are unavailable, so OCR `auto` currently fails in production. Open question, resolved by a separate packaging task — do not add `ocrmypdf` to `requirements.txt` or create `packages.txt` as part of unrelated work.
+OCR `auto` is implemented and wired into the UI, but `ocrmypdf` is **not** in `requirements.txt` and there is no `packages.txt`. On Streamlit Community Cloud the system Tesseract/Ghostscript binaries are unavailable, so OCR `auto` currently fails in production. Open question, resolved by a separate packaging task — do not add `ocrmypdf` to `requirements.txt` or create `packages.txt` as part of unrelated work. Since #53 the Ghostscript check is at least honest on Linux: if `gs` is on PATH it reports `ok`, instead of always failing on the Windows-only `gswin64c`.
 
 ## Secrets
 

@@ -4,10 +4,15 @@ Small OCR backend helper for converting image-only PDFs into searchable PDFs.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+# ПРАВКА #52: таймауты, чтобы зависший ocrmypdf не держал Streamlit-воркер вечно.
+OCR_TIMEOUT_SEC = 300
+DEPENDENCY_TIMEOUT_SEC = 15
 
 
 def ocr_pdf_to_searchable_pdf(
@@ -49,7 +54,17 @@ def ocr_pdf_to_searchable_pdf(
             capture_output=True,
             text=True,
             errors="replace",
+            timeout=OCR_TIMEOUT_SEC,
         )
+    except subprocess.TimeoutExpired as exc:
+        # ПРАВКА #52: зомби не остаётся — subprocess.run при таймауте сам делает
+        # kill() + communicate() до того, как бросить TimeoutExpired.
+        raise RuntimeError(
+            f"OCR не завершился за {OCR_TIMEOUT_SEC} с и был остановлен. "
+            "Файл слишком тяжёлый или ocrmypdf завис — попробуйте меньший "
+            "диапазон страниц.\n"
+            f"Command: {_format_command(exc.cmd)}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             _format_subprocess_error("OCRmyPDF failed", exc)
@@ -79,7 +94,7 @@ def check_ocr_dependencies() -> dict[str, dict[str, Any]]:
     checks = {
         "ocrmypdf": [sys.executable, "-m", "ocrmypdf", "--version"],
         "tesseract": ["tesseract", "--version"],
-        "ghostscript": ["gswin64c", "--version"],
+        "ghostscript": _ghostscript_command(),
     }
 
     return {
@@ -88,7 +103,27 @@ def check_ocr_dependencies() -> dict[str, dict[str, Any]]:
     }
 
 
-def _check_command_version(command: list[str]) -> dict[str, Any]:
+def _ghostscript_command() -> list[str]:
+    """
+    ПРАВКА #53: имя бинаря Ghostscript зависит от платформы.
+
+    На Windows это gswin64c (или gswin32c на 32-битной сборке), на Linux и macOS —
+    gs. Ищем по PATH через shutil.which, чтобы диагностика на проде была честной.
+    """
+    candidates = ("gswin64c", "gswin32c") if sys.platform.startswith("win") else ("gs",)
+    for name in candidates:
+        found = shutil.which(name)
+        if found:
+            return [found, "--version"]
+    # Ни один кандидат не найден — возвращаем первый, чтобы проверка честно
+    # упала в OSError с именем того бинаря, которого не хватает.
+    return [candidates[0], "--version"]
+
+
+def _check_command_version(
+    command: list[str],
+    timeout: float = DEPENDENCY_TIMEOUT_SEC,
+) -> dict[str, Any]:
     try:
         result = subprocess.run(
             command,
@@ -96,7 +131,19 @@ def _check_command_version(command: list[str]) -> dict[str, Any]:
             capture_output=True,
             text=True,
             errors="replace",
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        # ПРАВКА #52: контракт «не бросать» сохраняется, процесс уже снят внутри run().
+        return {
+            "ok": False,
+            "version": None,
+            "error": (
+                f"Проверка зависимости не ответила за {timeout:g} с: "
+                f"{_format_command(command)}"
+            ),
+            "command": command,
+        }
     except subprocess.CalledProcessError as exc:
         return {
             "ok": False,

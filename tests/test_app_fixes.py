@@ -81,3 +81,28 @@ def test_bom_fixture_first_block_renders_as_h1(tmp_path):
     assert run.font.name == "PT Sans Narrow"
     assert run.font.size == Pt(18)
     assert run.font.color.rgb == RGBColor.from_string("015198")
+
+
+def test_doc_types_point_at_distinct_templates():
+    """ПРАВКА #54: раньше оба типа грузили один и тот же file_id."""
+    drive_ids = [cfg["drive_id"] for cfg in app.DOC_TYPES.values()]
+
+    assert len(set(drive_ids)) == len(drive_ids)
+    assert all(drive_ids)
+
+
+def test_get_template_downloads_selected_drive_id(monkeypatch):
+    seen = []
+
+    def fake_download(file_id):
+        seen.append(file_id)
+        return "/tmp/template.docx"
+
+    monkeypatch.setattr(app, "download_template_from_drive", fake_download)
+
+    path = app.get_template(use_drive=True,
+                            drive_file_id="1_E7eI5PgMD50MEI8RNl8xoiWmhUsOUap",
+                            local_path=None)
+
+    assert seen == ["1_E7eI5PgMD50MEI8RNl8xoiWmhUsOUap"]
+    assert path == "/tmp/template.docx"
