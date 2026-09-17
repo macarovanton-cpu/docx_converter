@@ -949,13 +949,17 @@ def ensure_list_numbering(doc, style=None):
 
     numbering_elem = numbering_part.element
 
-    # Проверяем, не созданы ли уже наши определения
-    existing_abstract = {
-        int(a.get(qn('w:abstractNumId')))
-        for a in numbering_elem.findall(qn('w:abstractNum'))
-    }
-    if BULLET_ABSTRACT_ID in existing_abstract and NUMBERED_ABSTRACT_ID in existing_abstract:
-        return BULLET_NUM_ID, NUMBERED_NUM_ID
+    # ПРАВКА #58: если определение с нашим id уже пришло из numbering.xml
+    # шаблона, снимаем его и создаём заново. Раньше функция в этом случае
+    # молча возвращалась, и письмо получило бы маркер шаблона вместо длинного
+    # тире из профиля — поймать такое можно было бы только глазами в Word.
+    # У template.docx id идут 0-28, так что сегодня это холостой проход.
+    for existing_el in numbering_elem.findall(qn('w:abstractNum')):
+        if int(existing_el.get(qn('w:abstractNumId'))) in (BULLET_ABSTRACT_ID,
+                                                           NUMBERED_ABSTRACT_ID):
+            numbering_elem.remove(existing_el)
+
+    existing_abstract = set()
 
     # --- Bullet abstractNum ---
     if BULLET_ABSTRACT_ID not in existing_abstract:
