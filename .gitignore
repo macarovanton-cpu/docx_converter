@@ -18,3 +18,5 @@ test_files/
 
 template.docx
 fixture_check.docx
+
+.venv/
