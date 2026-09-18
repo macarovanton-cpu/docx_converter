@@ -129,9 +129,11 @@ class Finding:
 | `pipeline.md` | выход MinerU `model_version=pipeline`, очень шумный |
 | `vlm.md` | выход MinerU `model_version=vlm` |
 | `golden.md` | эталон, собирается в спеке 00 |
+| `vlm_raw.zip` | сырой ответ MinerU (`vlm`) живого прогона: `full.md`, `content_list.json`, картинки. Пишется live-тестом спеки 02, используется тестами спек 04 (#69) и 05 |
 
-Сырых zip MinerU, `content_list.json` и записанных ответов API среди фикстур
-**нет** — см. PLACEHOLDER-ы.
+Записанных ответов API (HTTP) среди фикстур **нет** — см. PLACEHOLDER-ы. Сырой
+zip и `content_list.json` появились после живого прогона (PLACEHOLDER 3 закрыт
+для `vlm`; у `pipeline` сырого архива в фикстурах по-прежнему нет).
 
 ## PLACEHOLDER-ы (сводно)
 

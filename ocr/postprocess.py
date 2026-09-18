@@ -325,6 +325,36 @@ def _merge_pair(a_lines: list[str], b_lines: list[str],
     return _render_rows(merged, a_separator)
 
 
+def _is_row_tail(row: list[str], target: list[str]) -> bool:
+    """ПРАВКА #69: номер потерян, содержимого ≥ 2 ячеек, ширина как у предыдущей строки.
+
+    Ровно одна непустая ячейка — это не хвост, а разделитель («I. Общие данные»)
+    или продолжение с прошлой страницы, которое уже разобрал _merge_pair.
+    Ширина обязана совпасть: иначе лишние ячейки пришлось бы выбросить.
+    """
+    return (len(row) == len(target) and row[0] == ""
+            and len([cell for cell in row if cell]) >= 2)
+
+
+def _merge_row_tails(rows: list[list[str]],
+                     findings: list[Finding]) -> list[list[str]] | None:
+    """Хвосты дописываются в предыдущую строку поячеечно. Нечего сливать → None."""
+    merged: list[list[str]] = []
+    for row in rows:
+        if merged and _is_row_tail(row, merged[-1]):
+            target = merged[-1]
+            for index, cell in enumerate(row):
+                if cell:
+                    target[index] = (target[index] + " " + cell).strip()
+            added = " ".join(cell for cell in row if cell)
+            findings.append(_finding(
+                "table_merged", added[:SNIPPET_LIMIT],
+                f"Продолжение дописано в строку «{target[0]}»; сверить со сканом"))
+        else:
+            merged.append(list(row))
+    return merged if len(merged) != len(rows) else None
+
+
 def _segments(lines: list[str]) -> list[list]:
     """Текст → чередование блоков ['table'|'other', строки]."""
     segments: list[list] = []
@@ -349,7 +379,7 @@ def _previous_table(out: list[list]) -> int | None:
 
 
 def merge_split_tables(md: str) -> tuple[str, list[Finding]]:
-    """Склеить таблицу с её продолжением, если между ними только пустые строки."""
+    """Склеить таблицу с её продолжением и строку с её хвостом (ПРАВКА #69)."""
     findings: list[Finding] = []
     out: list[list] = []
     for kind, block in _segments(md.split("\n")):
@@ -362,6 +392,13 @@ def merge_split_tables(md: str) -> tuple[str, list[Finding]]:
             out.append([kind, block])
         else:
             out[previous][1] = merged
+    for entry in out:                            # ПРАВКА #69: хвосты строк внутри таблицы
+        if entry[0] != "table":
+            continue
+        rows, separator = _rows_of(entry[1])
+        tails_merged = _merge_row_tails(rows, findings)
+        if tails_merged is not None:
+            entry[1] = _render_rows(tails_merged, separator)
     return "\n".join(line for _, block in out for line in block), findings
 
 

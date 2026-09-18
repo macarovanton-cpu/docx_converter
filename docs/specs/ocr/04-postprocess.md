@@ -108,6 +108,22 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 Первая строка B с пустой первой ячейкой и **двумя и более** непустыми — это
 обычная шапка матричной таблицы (`| | 2024 | 2025 |`): не сливать, находок не давать.
 
+**ПРАВКА #69, хвосты строк внутри таблицы.** Вторым проходом, уже по готовым
+таблицам: строка, у которой первая ячейка пуста, непустых **две и более**, а
+ширина равна ширине предыдущей строки, — хвост этой предыдущей строки. Ячейки
+дописываются **поячеечно** через пробел (`| | компьютер, | Для передачи |` →
+первая ячейка к первой, третья к третьей), строка исчезает, находка
+`table_merged` с тем же `suggestion`. Первая строка таблицы не сливается
+никогда — дописывать некуда. Ровно одна непустая ячейка — **не хвост**: это
+разделитель (`| I. Общие данные | | |`) или продолжение с прошлой страницы,
+которое уже разобрал шаг выше. Другая ширина — тоже не хвост: лишние ячейки
+пришлось бы выбросить, а тракт не глотает данные.
+
+Правило нужно живому прогону: пункт 13 бейкоффа приезжает из MinerU двумя
+строками (`13 | Программно-технический комплекс (персональный | В качестве…` и
+`| компьютер, общесистемного… | Для передачи данных…`), и без склейки вторая
+строка теряет номер — валидатор честно даёт на неё `table_empty_number`.
+
 ### 3. `fix_numero`
 
 `No` / `No.` перед цифрой или перед `п/п` → `№ ` (с одним пробелом после):
@@ -218,6 +234,16 @@ assert all(f.severity == "critical" for f in tr.values())
 for f in findings:
     assert f.snippet in out or f.rule in ("table_merged", "table_span")
 
+# живой сырой прогон (vlm_raw.zip, ПРАВКА #69): пункт 13 собран в одну строку
+raw = zipfile.ZipFile(require_fixture("vlm_raw.zip")).read("full.md").decode("utf-8")
+r_out, r_findings = postprocess(raw)
+table = parse_pipe_tables(r_out)[0]
+assert len([row for row in table if row[0] == "13"]) == 1
+assert "(персональный компьютер," in [r for r in table if r[0] == "13"][0][1]
+assert "" not in [row[0] for row in table]
+assert [f.rule for f in r_findings].count("table_merged") == 3
+assert "table_empty_number" not in [f.rule for f in validate(r_out)]
+
 # шумный прогон не роняет цепочку и ничего не глотает молча
 p_out, p_findings = postprocess(pipeline)
 assert "mixed_alphabet_unknown" in [f.rule for f in p_findings]
@@ -248,6 +274,18 @@ wide = a + "\n\n|  | хвост |\n|---|---|\n| 2 | x | лишняя |"
 md, f = merge_split_tables(wide)
 assert md == wide and [x.rule for x in f] == ["table_merge_failed"]
 assert merge_split_tables(a + "\n\nАбзац.\n\n|  | конец |\n|---|---|")[1] == []   # между ними текст
+
+# хвосты строк внутри таблицы (ПРАВКА #69)
+head = "| № | A | B |\n|---|---|---|\n"
+md, f = merge_split_tables(head + "| 1 | a | b |\n|  | хвост | ещё |")
+assert parse_pipe_tables(md) == [[["№", "A", "B"], ["1", "a хвост", "b ещё"]]]
+assert [x.rule for x in f] == ["table_merged"]
+one = head + "| 1 | a | b |\n| I. Общие данные |  |  |\n|  |  | одна |"
+assert merge_split_tables(one) == (one, [])          # одна непустая — не хвост
+first = "|  | x | y |\n|---|---|---|\n| 1 | a | b |"
+assert merge_split_tables(first) == (first, [])      # первой строке некуда дописывать
+wide2 = head + "| 1 | a | b |\n|  | x | y | лишняя |"
+assert merge_split_tables(wide2) == (wide2, [])      # ширина не та — ячейку не выбросим
 
 # fix_list_glue
 assert fix_list_glue("на:- один;- два") == "на: - один; - два"

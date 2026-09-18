@@ -4,12 +4,15 @@
 Сети и кэша спека не требует.
 """
 
+import zipfile
+
 from ocr import SEVERITIES
-from ocr_fixtures import count_diffs, read_fixture, text_tokens
+from ocr_fixtures import count_diffs, read_fixture, require_fixture, text_tokens
 from ocr.postprocess import (fix_degree, fix_list_glue, fix_mixed_alphabet,
                              fix_numero, flag_signature_block, flag_translit,
                              html_tables_to_pipe, merge_split_tables,
                              parse_pipe_tables, postprocess)
+from ocr.validate import validate
 from test_ocr_fixtures import VLM_TO_GOLDEN_DIFFS
 
 # Фактический остаток на vlm.md: 5 опкодов — «сыручими», «IR-камерами» и три
@@ -84,6 +87,22 @@ def test_findings():
         assert f.snippet in out or f.rule in ("table_merged", "table_span")
 
 
+def test_row_tail_merged_on_live_raw():
+    """ПРАВКА #69: в живом прогоне пункт 13 приехал двумя строками — стал одной."""
+    with zipfile.ZipFile(require_fixture("vlm_raw.zip")) as archive:
+        raw = archive.read("full.md").decode("utf-8")
+    out, findings = postprocess(raw)
+    table = parse_pipe_tables(out)[0]
+
+    rows13 = [row for row in table if row[0] == "13"]
+    assert len(rows13) == 1                                     # было две строки
+    assert "(персональный компьютер," in rows13[0][1]           # хвост первой ячейки
+    assert "Ethernet. Для передачи данных" in rows13[0][2]      # хвост третьей
+    assert "" not in [row[0] for row in table]
+    assert [f.rule for f in findings].count("table_merged") == 3
+    assert "table_empty_number" not in [f.rule for f in validate(out)]
+
+
 def test_noisy_pipeline_run():
     pipeline = read_fixture("pipeline.md")
     out, findings = postprocess(pipeline)
@@ -122,6 +141,21 @@ def test_merge_split_tables():
     assert md == wide and [x.rule for x in f] == ["table_merge_failed"]
 
     assert merge_split_tables(a + "\n\nАбзац.\n\n|  | конец |\n|---|---|")[1] == []
+
+
+def test_merge_row_tails():
+    """ПРАВКА #69: строка с пустым номером и ≥2 непустыми — хвост предыдущей."""
+    head = "| № | A | B |\n|---|---|---|\n"
+    md, f = merge_split_tables(head + "| 1 | a | b |\n|  | хвост | ещё |")
+    assert parse_pipe_tables(md) == [[["№", "A", "B"], ["1", "a хвост", "b ещё"]]]
+    assert [x.rule for x in f] == ["table_merged"]
+
+    one = head + "| 1 | a | b |\n| I. Общие данные |  |  |\n|  |  | одна |"
+    assert merge_split_tables(one) == (one, [])          # одна непустая — не хвост
+    first = "|  | x | y |\n|---|---|---|\n| 1 | a | b |"
+    assert merge_split_tables(first) == (first, [])      # первой строке некуда дописывать
+    wide = head + "| 1 | a | b |\n|  | x | y | лишняя |"
+    assert merge_split_tables(wide) == (wide, [])        # ширина не та — ячейку не выбросим
 
 
 def test_fix_list_glue():
