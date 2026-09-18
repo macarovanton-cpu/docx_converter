@@ -13,7 +13,7 @@
 | Файл | Строк | Роль |
 |---|---|---|
 | `convert.py` | 1630 | Markdown → DOCX, монолит |
-| `app.py` | 728 | Streamlit UI, два режима |
+| `app.py` | 938 | Streamlit UI, два режима (728 на дату аудита; +MinerU, ПРАВКА #73) |
 | `file_converter.py` | 712 | DOCX/PDF/TXT → Markdown, слой MarkItDown, `analyze_pdf_pages` |
 | `ocr_converter.py` | 185 | subprocess-обёртка `ocrmypdf` |
 | `pdf_core.py` | 115 | провайдеро-независимое ядро PDF → Markdown |
@@ -42,6 +42,11 @@ grep -rn "ПРАВКА #" --include=*.py . | grep -v '/\.venv/'
 
 Следующий свободный номер — **#60**, он закреплён за спекой 01. Распределение
 #60…#66 по спекам — в `docs/specs/ocr/README.md`.
+
+**Состояние на ПРАВКУ #73 (2026-09-19).** Абзацы выше — снимок на дату аудита.
+Сейчас в коде `#1…#24, #26…#73`: #60 — `pdf_core.py`, #61–#66 — по одной на
+модуль `ocr/`, #67–#72 — последующие исправления тракта (#71 — `conftest.py`),
+**#73 — `app.py`, этап 8**. Следующий свободный номер — **#74**.
 
 ## Контракт OcrProvider
 
@@ -81,6 +86,41 @@ def pdf_to_markdown(pdf_bytes, *, page_range=None, mode="auto", provider=None) -
 
 `ocr_auto_mode.py` протокол провайдера не использует вообще: слов `provider` и
 `Protocol` в файле нет. Этап 1 его не трогает.
+
+### ПРАВКА #73: MinerU из UI (этап 8)
+
+У `ocr_mode` три значения: `off`, `auto`, `mineru`. `auto` (OCRmyPDF) попадает
+в переключатель, только если `check_ocr_dependencies` нашёл все три бинарника
+(`app._ocr_mode_options`, проверка кэшируется на процесс) — на Streamlit Cloud
+их нет, и вариант там не предлагается. Для PDF в режиме `mineru`:
+
+```
+app._convert_uploaded_file(…, ocr_mode="mineru", verify=…, annotate=…, status=…)
+  ├─ app._pdf_page_subset(bytes, page_range)      # pypdf; run_pipeline диапазона не знает
+  └─ ocr.cli.run_pipeline(bytes, source_name=…, work_dir=<tmp>, verify=…, annotate=…,
+                          cache=LocalCache(app._OCR_CACHE_ROOT),
+                          provider_factory=app._mineru_provider_factory(key, status))
+       → (markdown, report)
+```
+
+- `run_pipeline` и весь `ocr/` **не менялись**. Прогресс (`st.status`) снят со
+  швов провайдера: подкласс `MineruProvider` в фабрике метит `fetch_raw_zip`
+  («загрузка» → «постобработка и проверка»), инжектируемый `sleep` — «ожидание».
+  Отдельного колбэка прогресса в тракте нет; постобработка и проверка идут
+  одной меткой (это миллисекунды).
+- Ключ: `st.secrets["MINERU_API_KEY"]`, затем переменная окружения
+  (`app._mineru_api_key`). При попадании в кэш ключ не нужен.
+- Кэш — `LocalCache` в `.cache/ocr` рядом с `app.py`; на Streamlit Cloud он
+  эфемерный, это осознанно. `make_cache("drive")` по-прежнему не реализован.
+- Номера страниц в находках при заданном диапазоне считаются **от вырезки**,
+  а не от исходного PDF (UI об этом предупреждает).
+- `MineruError` показывается текстом ошибки, `MineruAuthError` — с подсказкой
+  про ключ; трейсбека в UI нет (`result["error"]`).
+- В результате конвертации новый ключ `report` (`None` вне режима `mineru`);
+  `report.json` скачивается отдельной кнопкой, в общий ZIP не входит.
+- Тесты — `tests/test_app_fixes.py`, с фейковым провайдером, без сети. Живой
+  прогон MinerU из UI этой правкой **не проверялся** (сети не было): проверены
+  путь через локальный кэш на `_test/fixtures/ocr/bakeoff.pdf` и ветка ошибки.
 
 ## ocr_converter.py и новый тракт
 
@@ -214,6 +254,20 @@ template_path=None)` → открыто `python-docx`.
 2. Раздел «Known production limitation» описывает `auto` как единственный
    OCR-путь. После этапов 01–07 появится второй провайдер и CLI; текст
    устареет. Обновляет спека 07 (ей это разрешено).
+3. После ПРАВКИ #73 (не исправлено, правка CLAUDE.md в задачу не входила):
+   «Numbered edits convention» заканчивает нумерацию на #66 и не знает про #73
+   в `app.py`; «Known production limitation» говорит, что `auto` на проде
+   падает, — теперь он там просто не предлагается, а рабочий OCR-путь прода —
+   MinerU; раздел «Secrets» не упоминает `MINERU_API_KEY`; в описании `app.py`
+   нет режима MinerU; `pdf_core.py` описан со старым протоколом
+   `ocr_pdf_to_markdown` (с #60 — `ocr_pdf -> OcrResult`).
+
+### docs/specs/ocr/README.md
+
+1. После ПРАВКИ #73: этап 8 по-прежнему значится «вне автономного прогона, спек
+   нет», а `app.py` — в «Запрещено». Этап 8 выполнен по явному запросу без
+   отдельной спеки; таблица «этап → правка» про #73 не знает. PLACEHOLDER 8
+   (кэш `drive`) остаётся открытым.
 
 ### README.md
 

@@ -1,10 +1,13 @@
 import hashlib
 import io
+import json
 import os
 import re
 import tempfile
+import time
 import zipfile
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
@@ -15,7 +18,12 @@ from file_converter import (
     convert_with_markitdown,
     parse_page_range,
 )
+from ocr.cache import LocalCache
+from ocr.cli import run_pipeline
+from ocr.mineru_provider import MineruAuthError, MineruProvider
+from ocr.validate import ANNOTATION_PREFIX
 from ocr_auto_mode import pdf_pages_without_text_layer
+from ocr_converter import check_ocr_dependencies
 from pdf_core import pdf_to_markdown_with_status
 
 
@@ -230,8 +238,132 @@ def _display_ocr_candidate_status(uploaded_file, ext: str, ocr_mode: str,
         st.success("OCR auto: текстовый слой найден, OCR не нужен.")
 
 
+# ПРАВКА #73: MinerU (этап 8 OCR-тракта) в режиме «Файлы -> Markdown».
+# Кэш рядом с app.py, а не от cwd; на Streamlit Cloud он эфемерный — это осознанно.
+_OCR_CACHE_ROOT = Path(__file__).resolve().parent / ".cache" / "ocr"
+
+_OCR_MODE_LABELS = {
+    "off": "Без OCR",
+    "auto": "OCRmyPDF (локально)",
+    "mineru": "MinerU (облако)",
+}
+
+_MINERU_KEY_HINT = (
+    "Проверьте MINERU_API_KEY: .streamlit/secrets.toml локально, Secrets на "
+    "Streamlit Cloud или переменная окружения."
+)
+
+
+def _ocr_mode_options(ocrmypdf_ok: bool) -> list[str]:
+    """OCRmyPDF предлагается, только если его бинарники есть (на Streamlit Cloud их нет)."""
+    return ["off"] + (["auto"] if ocrmypdf_ok else []) + ["mineru"]
+
+
+@st.cache_resource(show_spinner=False)
+def _ocrmypdf_available() -> bool:
+    # три subprocess --version: один раз на процесс, а не на каждый rerun
+    return all(check["ok"] for check in check_ocr_dependencies().values())
+
+
+def _mineru_api_key() -> str | None:
+    """st.secrets, затем окружение. Нет secrets.toml — FileNotFoundError, нет ключа — KeyError."""
+    try:
+        return st.secrets["MINERU_API_KEY"]
+    except (FileNotFoundError, KeyError):
+        return os.environ.get("MINERU_API_KEY")
+
+
+def _pdf_page_subset(pdf_bytes: bytes, page_range: str | None) -> bytes:
+    """run_pipeline диапазона не принимает: выбранные страницы вырезаются до отправки."""
+    page_indexes = parse_page_range(page_range)
+    if page_indexes is None:
+        return pdf_bytes
+
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    total_pages = len(reader.pages)
+    writer = PdfWriter()
+    for page_index in page_indexes:
+        if page_index >= total_pages:
+            raise ValueError(
+                f"Страница {page_index + 1} вне диапазона PDF: "
+                f"в файле всего {total_pages} стр."
+            )
+        writer.add_page(reader.pages[page_index])
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _mineru_provider_factory(api_key: str | None, status):
+    """provider_factory для run_pipeline: ключ из UI + метки этапов в st.status.
+
+    У run_pipeline колбэка прогресса нет (и сигнатура заморожена спекой), поэтому
+    этапы ловятся на швах провайдера: fetch_raw_zip и инжектируемый sleep.
+    """
+    def set_label(text: str) -> None:
+        if status is not None:
+            status.update(label=text)
+
+    def build(model_version: str):
+        # ponytail: sleep зовётся и в ретраях загрузки — «ожидание» может мигнуть
+        # раньше времени. Косметика; точнее — только колбэком внутри ocr/.
+        def sleep(seconds: float) -> None:
+            set_label(f"MinerU ({model_version}): ожидание результата…")
+            time.sleep(seconds)
+
+        class _StatusProvider(MineruProvider):
+            def fetch_raw_zip(self, pdf_bytes, page_range=None):
+                set_label(f"MinerU ({model_version}): загрузка файла…")
+                zip_bytes = super().fetch_raw_zip(pdf_bytes, page_range)
+                set_label("Постобработка и проверка…")
+                return zip_bytes
+
+        return _StatusProvider(api_key, model_version=model_version, sleep=sleep)
+
+    return build
+
+
+def _split_findings(report: dict) -> tuple[list[dict], list[dict]]:
+    """(обычные находки, low_confidence): вторых десятки, в UI они отдельно."""
+    findings = report["findings"]
+    return ([f for f in findings if f["rule"] != "low_confidence"],
+            [f for f in findings if f["rule"] == "low_confidence"])
+
+
+def _findings_table(findings: list[dict]) -> list[dict]:
+    return [{"Правило": f["rule"], "Серьёзность": f["severity"],
+             "Страница": f["page"], "Фрагмент": f["snippet"],
+             "Предложение": f["suggestion"]} for f in findings]
+
+
+def _render_ocr_report(report: dict) -> None:
+    """Блок находок под результатом: сводка, список, low_confidence отдельно."""
+    summary = report["summary"]
+    main, low_conf = _split_findings(report)
+    line = (f"Находки: critical — {summary['critical']}, "
+            f"warning — {summary['warning']}, info — {summary['info']}"
+            + (" (результат из кэша)" if report["cache_hit"] else ""))
+    if summary["critical"]:
+        st.error(line)
+    else:
+        st.info(line)
+    if main:
+        with st.expander(f"Находки ({len(main)})",
+                         expanded=bool(summary["critical"])):
+            st.dataframe(_findings_table(main), use_container_width=True,
+                         hide_index=True)
+    if low_conf:
+        with st.expander(f"low_confidence — расхождения двух прогонов ({len(low_conf)})",
+                         expanded=False):
+            st.dataframe(_findings_table(low_conf), use_container_width=True,
+                         hide_index=True)
+
+
 def _convert_uploaded_file(uploaded_file, page_range: str | None,
-                           ocr_mode: str = "off") -> dict:
+                           ocr_mode: str = "off", *, verify: bool = False,
+                           annotate: bool = True, status=None) -> dict:
     ext = _file_ext(uploaded_file.name)
     if ext != "pdf":
         # Диапазон страниц поддержан только для PDF: convert_with_markitdown
@@ -239,9 +371,20 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
         page_range = None
     display_range = page_range or "all"
     ocr_status = None
+    report = None
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
     try:
-        if ext == "pdf":
+        if ext == "pdf" and ocr_mode == "mineru":
+            # ПРАВКА #73: весь тракт — в ocr.cli.run_pipeline, здесь только сборка входа.
+            pdf_bytes = _pdf_page_subset(uploaded_file.getvalue(), page_range)
+            with tempfile.TemporaryDirectory() as work_dir:
+                markdown, report = run_pipeline(
+                    pdf_bytes, source_name=uploaded_file.name,
+                    work_dir=Path(work_dir), verify=verify, annotate=annotate,
+                    cache=LocalCache(_OCR_CACHE_ROOT),
+                    provider_factory=_mineru_provider_factory(
+                        _mineru_api_key(), status))
+        elif ext == "pdf":
             markdown, ocr_status = pdf_to_markdown_with_status(
                 uploaded_file.getvalue(), page_range=page_range, mode=ocr_mode)
         else:
@@ -253,9 +396,13 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
             "page_range": display_range,
             "ocr_status": ocr_status,
             "markdown": markdown,
+            "report": report,
             "error": None,
         }
     except Exception as e:
+        error = str(e) or type(e).__name__
+        if isinstance(e, MineruAuthError):
+            error = f"{error}. {_MINERU_KEY_HINT}"
         return {
             "filename": uploaded_file.name,
             "download_name": _safe_md_filename(uploaded_file.name),
@@ -263,7 +410,8 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
             "page_range": display_range,
             "ocr_status": ocr_status,
             "markdown": "",
-            "error": str(e),
+            "report": None,
+            "error": error,
         }
     finally:
         try:
@@ -480,21 +628,49 @@ def render_files_to_markdown_mode():
         st.caption("Загрузите один или несколько файлов для конвертации.")
         return
 
+    # ПРАВКА #73: вариант MinerU; OCRmyPDF — только при найденных бинарниках.
     ocr_mode = st.radio(
         "OCR mode",
-        options=["off", "auto"],
+        options=_ocr_mode_options(_ocrmypdf_available()),
+        format_func=_OCR_MODE_LABELS.__getitem__,
         index=0,
         horizontal=True,
         key="files_to_md_ocr_mode",
         help=(
-            "off: текущая конвертация через MarkItDown без OCR. "
-            "auto: применяет OCR только к PDF без текстового слоя."
+            "Без OCR: конвертация через MarkItDown. "
+            "OCRmyPDF: OCR только для PDF без текстового слоя (нужны локальные "
+            "Tesseract и Ghostscript). "
+            "MinerU: облачное распознавание PDF с отчётом о сомнительных местах."
         ),
     )
+    verify = False
+    annotate = True
     if ocr_mode == "off":
         st.caption("OCR выключен: используется текущий MarkItDown flow.")
-    else:
+    elif ocr_mode == "auto":
         st.caption("OCR auto включен: OCR применяется только к PDF-кандидатам.")
+    else:
+        st.caption(
+            "MinerU: PDF уходят в облако mineru.net (до 200 МБ и 200 стр.), "
+            "остальные форматы конвертируются как обычно. При заданном диапазоне "
+            "отправляются только выбранные страницы, и номера страниц в находках "
+            "считаются от этой вырезки."
+        )
+        if not _mineru_api_key():
+            st.warning(f"Ключ MinerU не найден. {_MINERU_KEY_HINT}")
+        verify = st.checkbox(
+            "Сверка вторым прогоном",
+            value=False,
+            key="files_to_md_mineru_verify",
+            help="Второй прогон другой моделью MinerU, расхождения попадают в "
+                 "находки. Удваивает время и расход квоты.",
+        )
+        annotate = st.checkbox(
+            "Пометки в тексте",
+            value=True,
+            key="files_to_md_mineru_annotate",
+            help="Находки вставляются в Markdown как «!! ПРОВЕРИТЬ: … !!».",
+        )
 
     range_keys = {
         idx: f"page_range_{idx}_{_safe_md_filename(uploaded_file.name)}"
@@ -608,12 +784,27 @@ def render_files_to_markdown_mode():
             for idx, uploaded_file in enumerate(uploaded_files):
                 key = range_keys[idx]
                 page_range = _normalize_page_range(st.session_state.get(key))
-                with st.spinner(f"Конвертирую {uploaded_file.name}..."):
-                    result = _convert_uploaded_file(
-                        uploaded_file,
-                        page_range,
-                        ocr_mode=ocr_mode,
-                    )
+                if ocr_mode == "mineru" and _file_ext(uploaded_file.name) == "pdf":
+                    # ПРАВКА #73: минутное ожидание облака не должно выглядеть зависанием
+                    with st.status(f"MinerU: {uploaded_file.name}…") as status:
+                        result = _convert_uploaded_file(
+                            uploaded_file, page_range, ocr_mode=ocr_mode,
+                            verify=verify, annotate=annotate, status=status)
+                        if result["error"]:
+                            status.update(
+                                label=f"MinerU: {uploaded_file.name} — ошибка",
+                                state="error")
+                        else:
+                            status.update(
+                                label=f"MinerU: {uploaded_file.name} — готово",
+                                state="complete")
+                else:
+                    with st.spinner(f"Конвертирую {uploaded_file.name}..."):
+                        result = _convert_uploaded_file(
+                            uploaded_file,
+                            page_range,
+                            ocr_mode=ocr_mode,
+                        )
                 results.append(result)
                 progress.progress((idx + 1) / len(uploaded_files))
             progress.empty()
@@ -678,14 +869,33 @@ def render_files_to_markdown_mode():
             if len(markdown) > 5000:
                 st.caption(
                     f"Показаны первые 5000 символов из {len(markdown)}.")
-            st.download_button(
-                "Скачать .md",
-                data=markdown.encode("utf-8"),
-                file_name=result["download_name"],
-                mime="text/markdown",
-                key=f"download_md_{idx}_{result['download_name']}",
-                use_container_width=True,
-            )
+            report = result.get("report")
+            if report:
+                _render_ocr_report(report)
+                if ANNOTATION_PREFIX in markdown:
+                    st.caption("В тексте есть пометки «!! ПРОВЕРИТЬ: … !!» — "
+                               "перед конвертацией в DOCX их нужно снять.")
+            md_col, report_col = st.columns(2) if report else (st.container(), None)
+            with md_col:
+                st.download_button(
+                    "Скачать .md",
+                    data=markdown.encode("utf-8"),
+                    file_name=result["download_name"],
+                    mime="text/markdown",
+                    key=f"download_md_{idx}_{result['download_name']}",
+                    use_container_width=True,
+                )
+            if report:
+                with report_col:
+                    st.download_button(
+                        "Скачать report.json",
+                        data=json.dumps(report, ensure_ascii=False,
+                                        indent=2).encode("utf-8"),
+                        file_name=f"{Path(result['download_name']).stem}.report.json",
+                        mime="application/json",
+                        key=f"download_report_{idx}_{result['download_name']}",
+                        use_container_width=True,
+                    )
 
 
 st.set_page_config(
