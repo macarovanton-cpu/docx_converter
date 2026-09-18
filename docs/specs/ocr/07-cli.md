@@ -272,22 +272,41 @@ doc = docx.Document(str(tmp_path / "t.docx"))
 assert max(len(t.rows) for t in doc.tables) >= 50                 # таблица ТЗ доехала целиком
 ```
 
-Живой:
+Живой (ПРАВКА #67 — метрика относительная):
 
 ```python
 @pytest.mark.live
 def test_live_cli_bakeoff(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    code = main([str(require_fixture("bakeoff.pdf")), "--out", str(tmp_path / "o"), "--verify"])
+    out_dir = tmp_path / "o"
+    code = main([str(require_fixture("bakeoff.pdf")), "--out", str(out_dir), "--verify"])
     payload = json.loads(capsys.readouterr().out)
     assert code in (0, 2) and payload["status"] in ("ok", "findings")
-    assert count_diffs(Path(payload["out_md"]).read_text(encoding="utf-8"),
-                       read_fixture("golden.md")) <= 2 * VLM_TO_GOLDEN_DIFFS   # vlm не детерминирован
+
+    out = Path(payload["out_md"]).read_text(encoding="utf-8")
+    golden = read_fixture("golden.md")
+    raw = (out_dir / "raw" / "vlm" / "full.md").read_text(encoding="utf-8")
+    assert count_diffs(out, golden) < count_diffs(raw, golden)
+    assert not re.search(r"\bNo\.?[ \t]*(?=\d|п/п)", out)
+    assert "$C^" not in out
+    assert "РоЕ" not in out                       # кириллические Р, о, Е
+    assert len(parse_pipe_tables(out)) == 1
 ```
+
+Почему не абсолютный порог. `2 * VLM_TO_GOLDEN_DIFFS` мерил не работу тракта, а
+совпадение свежего прогона vlm с тем прогоном, из которого собран `golden.md`.
+Со вторым живым прогоном (18.09) он дал 29 при пороге 24 — без регрессии тракта:
+24 из 29 опкодов — пробелы, потерянные на переносах внутри ячеек, остальные 5 — известный
+остаток спек 04–05 («сыручими», «IR-камерами», транслит в подписях). Сырой markdown
+берётся из `<out>/raw/vlm/full.md` — туда `result_from_zip` распаковывает ответ провайдера.
+Четыре последние проверки от прогона не зависят: это ровно то, что постпроцессор обязан
+починить по спеке 04 (правила 1, 3, 4, 5).
 
 ## Готово, когда
 
-- `pytest -v` зелёный, фикстурные тесты не пропущены.
+- `pytest -v` зелёный, фикстурные тесты не пропущены. Если `MINERU_API_KEY` выставлен в
+  окружении, голый `pytest` поднимает живые тесты и уходит в сеть — без ключа или
+  без квоты запускать `pytest -m "not live"` и так и писать в отчёте.
 - Из корня репозитория `python -m ocr.cli --help` печатает справку и выходит с 0,
   не импортируя `streamlit`.
 - Ручная проверка на Windows и на Linux/WSL2 (у кого есть ключ): команда из
@@ -295,7 +314,7 @@ def test_live_cli_bakeoff(tmp_path, monkeypatch, capsys):
   выхода и время обоих запусков (второй — из кэша). Нет ключа или второй
   платформы — так и написать в отчёте, не выдавать непроверенное за проверенное.
 - `git diff --stat`: `ocr/cli.py`, `tests/test_ocr_cli.py`, `CLAUDE.md`, `README.md`.
-  `app.py` не изменён.
+  `app.py` не изменён. Правка #67 трогает только `tests/test_ocr_cli.py` и эту спеку.
 
 ## Коммит
 

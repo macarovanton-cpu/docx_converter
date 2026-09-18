@@ -2,11 +2,14 @@
 
 Сети нет: zip собирается в памяти, провайдер подменяется фабрикой-журналом.
 Фикстурные тесты пропускаются через require_fixture, если нет _test/fixtures/ocr/.
+
+ПРАВКА #67: у живого бейкоффа метрика относительная — см. test_live_cli_bakeoff.
 """
 
 import hashlib
 import io
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -17,10 +20,9 @@ from convert import convert_md_to_docx
 from ocr_fixtures import count_diffs, read_fixture, require_fixture
 from ocr.cache import LocalCache
 from ocr.cli import main, run_pipeline
-from ocr.postprocess import postprocess
+from ocr.postprocess import parse_pipe_tables, postprocess
 from ocr.validate import strip_annotations
 from pdf_core import PageInfo
-from test_ocr_fixtures import VLM_TO_GOLDEN_DIFFS
 
 
 def make_zip(full_md: str) -> bytes:
@@ -214,9 +216,19 @@ def test_main_does_not_leak_api_key(tmp_path, monkeypatch, capsys):
 @pytest.mark.live
 def test_live_cli_bakeoff(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    code = main([str(require_fixture("bakeoff.pdf")), "--out", str(tmp_path / "o"),
-                 "--verify"])
+    out_dir = tmp_path / "o"
+    code = main([str(require_fixture("bakeoff.pdf")), "--out", str(out_dir), "--verify"])
     payload = json.loads(capsys.readouterr().out)
     assert code in (0, 2) and payload["status"] in ("ok", "findings")
-    assert count_diffs(Path(payload["out_md"]).read_text(encoding="utf-8"),
-                       read_fixture("golden.md")) <= 2 * VLM_TO_GOLDEN_DIFFS
+
+    out = Path(payload["out_md"]).read_text(encoding="utf-8")
+    golden = read_fixture("golden.md")
+    # ПРАВКА #67: vlm не детерминирован, абсолютный порог мерил совпадение с прогоном,
+    # из которого собран эталон. Меряем работу тракта: сырой markdown -> out.md.
+    raw = (out_dir / "raw" / "vlm" / "full.md").read_text(encoding="utf-8")
+    assert count_diffs(out, golden) < count_diffs(raw, golden)
+    # жёсткое, от прогона не зависит: что постпроцессор обязан починить — починено
+    assert not re.search(r"\bNo\.?[ \t]*(?=\d|п/п)", out)
+    assert "$C^" not in out
+    assert "РоЕ" not in out                       # кириллические Р, о, Е
+    assert len(parse_pipe_tables(out)) == 1
