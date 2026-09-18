@@ -44,6 +44,10 @@ _DEGREE_RE = re.compile(
 _DEGREE_TAIL_RE = re.compile(r"°C[ \t]+(?=[;.,)])")
 # ПРАВКА #68: «;» или «:» вплотную к маркеру списка; «:---» — разделитель таблицы
 _LIST_GLUE_RE = re.compile(r"(?<=[;:])-(?!-)")
+# ПРАВКА #72: конец предложения вплотную к началу следующего. Слева ровно две
+# буквы (не цифры) — отсекает инициалы «И.М.», «т.е.Х» и нумерацию «1.3.4.»;
+# справа заглавная кириллица — отсекает «Windows 8.1» и «в т.ч.дистрибутивы».
+_SENTENCE_GLUE_RE = re.compile(r"(?<=[^\W\d_]{2})\.(?=[А-ЯЁ])")
 _TABLE_TAG_RE = re.compile(r"</?table\b[^>]*>", re.I)
 _CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 _SEP_CELL_RE = re.compile(r":?-+:?")
@@ -419,6 +423,16 @@ def fix_list_glue(md: str) -> str:
     return _LIST_GLUE_RE.sub(" -", md)
 
 
+def fix_sentence_glue(md: str) -> str:
+    """ПРАВКА #72: «проектом.Предусмотреть» → «проектом. Предусмотреть».
+
+    Узко: слева от точки две буквы подряд, справа — заглавная кириллическая.
+    Инициалы («И.М. Халиуллин», «т.е.Х»), нумерация пунктов («1.3.4.Требования»)
+    и версии («Windows 8.1») под шаблон не попадают.
+    """
+    return _SENTENCE_GLUE_RE.sub(". ", md)
+
+
 def _canonical(folded: str | None, allow_ip_code: bool) -> str | None:
     if folded is None:
         return None
@@ -501,6 +515,7 @@ def postprocess(md: str) -> tuple[str, list[Finding]]:
     md = fix_numero(md)
     md = fix_degree(md)
     md = fix_list_glue(md)                       # ПРАВКА #68
+    md = fix_sentence_glue(md)                   # ПРАВКА #72
     md, found = fix_mixed_alphabet(md)
     findings += found
     findings += flag_translit(md)

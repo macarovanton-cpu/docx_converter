@@ -246,8 +246,9 @@ def validate(md: str, content_list: list | None = None) -> list[Finding]:
 def page_of(snippet: str, content_list: list | None) -> int | None:
     """Страница (1-based) первого блока content_list, содержащего snippet.
 
-    PLACEHOLDER: форма блока — по доке, реального content_list.json в фикстурах
-    нет; после live-прогона спеки 02 (vlm_raw.zip) добавить тест на настоящем файле.
+    ПРАВКА #72: PLACEHOLDER снят — форма блока сверена с настоящим
+    content_list.json из vlm_raw.zip (живой прогон vlm), тест
+    tests/test_ocr_validate.py::test_pages_from_real_content_list.
     """
     if not content_list:
         return None

@@ -9,8 +9,8 @@ import zipfile
 from ocr import SEVERITIES
 from ocr_fixtures import count_diffs, read_fixture, require_fixture, text_tokens
 from ocr.postprocess import (fix_degree, fix_list_glue, fix_mixed_alphabet,
-                             fix_numero, flag_signature_block, flag_translit,
-                             html_tables_to_pipe, merge_split_tables,
+                             fix_numero, fix_sentence_glue, flag_signature_block,
+                             flag_translit, html_tables_to_pipe, merge_split_tables,
                              parse_pipe_tables, postprocess)
 from ocr.validate import validate
 from test_ocr_fixtures import VLM_TO_GOLDEN_DIFFS
@@ -20,7 +20,11 @@ from test_ocr_fixtures import VLM_TO_GOLDEN_DIFFS
 # ПРАВКА #68: порог опущен с 7 до факта — запас в две единицы пропускал бы
 # регрессию на один опкод. Склейки списка (правка 8) в остаток не попадают:
 # fix_list_glue чинит их в тракте ровно так же, как они починены в эталоне.
-REMAINING_DIFFS = 5
+# ПРАВКА #72: 5 → 6. Правка 9 в остаток не попадает (fix_sentence_glue чинит её
+# в тракте), а правка 10 попадает: «(персональныйкомпьютер,» пришёл из MinerU
+# уже слитным словом, разделить его без скана нельзя. В эталоне пробел стоит —
+# так эту же строку склеивает #69 на сыром прогоне, где ячейки ещё раздельны.
+REMAINING_DIFFS = 6
 
 
 def run_vlm():
@@ -42,6 +46,9 @@ def test_fixed_artifacts():
     assert out.count("№ ") == 4 and "№ п/п" in out and "№ 384-ФЗ" in out and "№ 7-ФЗ" in out
     assert "$" not in out and "+50 °C;" in out and "+35 °C." in out
     assert "РоЕ" not in out and out.count("PoE") == 2
+    # ПРАВКА #72: точка между предложениями разведена, соседние случаи — нет
+    assert "RS-485,Ethernet. Для" in out and "и ПО. Работы," in out
+    assert "в т.ч.дистрибутивы" in out and "Приложение 1.План" in out
 
 
 def test_not_fixed_without_scan():
@@ -49,6 +56,9 @@ def test_not_fixed_without_scan():
     assert "сыручими" in out and "сыпучими" not in out
     assert "IR-камерами" in out
     assert "A.II. Taipov" in out and "P.P. Hypeeb" in out
+    # ПРАВКА #72: MinerU прислал слово слитным — тракт слова не режет (эталонный
+    # «(персональный компьютер,» достижим только на сыром прогоне, через #69)
+    assert "(персональныйкомпьютер," in out
 
 
 def test_single_merged_table():
@@ -167,6 +177,17 @@ def test_fix_list_glue():
     assert fix_list_glue("+-30кг, 60 т. +- 50кг") == "+-30кг, 60 т. +- 50кг"
     assert fix_list_glue("|:---|---:|") == "|:---|---:|"
     assert fix_list_glue(fix_list_glue("на:-")) == fix_list_glue("на:-")
+
+
+def test_fix_sentence_glue():
+    """ПРАВКА #72: точка между предложениями; инициалы, нумерация и версии — мимо."""
+    assert fix_sentence_glue("проектом.Предусмотреть") == "проектом. Предусмотреть"
+    assert fix_sentence_glue("Ethernet.Для и ПО.Работы") == "Ethernet. Для и ПО. Работы"
+    for same in ("И.М. Халиуллин", "т.е.Х", "1.3.4.Требования", "Windows 8.1",
+                 "в т.ч.дистрибутивы", "компания».Юридический", "Приложение 1.План",
+                 "A.II. Taipov", "А.Ш. Таипов"):
+        assert fix_sentence_glue(same) == same
+    assert fix_sentence_glue(fix_sentence_glue("ПО.Работы")) == fix_sentence_glue("ПО.Работы")
 
 
 def test_fix_numero_and_degree():

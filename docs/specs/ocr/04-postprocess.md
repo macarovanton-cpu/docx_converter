@@ -1,6 +1,6 @@
 # 04 — Детерминированный постпроцессор
 
-**# ПРАВКА #63** (+ #68, #69). Зависит от: 00. Независима от 01–03. Сеть и кэш не нужны.
+**# ПРАВКА #63** (+ #68, #69, #72). Зависит от: 00. Независима от 01–03. Сеть и кэш не нужны.
 
 ## Цель
 
@@ -46,6 +46,7 @@ def merge_split_tables(md: str) -> tuple[str, list[Finding]]: ...
 def fix_numero(md: str) -> str: ...
 def fix_degree(md: str) -> str: ...
 def fix_list_glue(md: str) -> str: ...        # ПРАВКА #68
+def fix_sentence_glue(md: str) -> str: ...    # ПРАВКА #72
 def fix_mixed_alphabet(md: str) -> tuple[str, list[Finding]]: ...
 def flag_translit(md: str) -> list[Finding]: ...
 def flag_signature_block(md: str) -> list[Finding]: ...
@@ -144,6 +145,27 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 разделитель pipe-таблицы `|:---|` остаётся собой. То же правило — правка 8
 сборки `golden.md` (спека 00), поэтому в остаток метрики склейки не попадают.
 
+### 5b. `fix_sentence_glue` (ПРАВКА #72)
+
+Точка между предложениями, у которой OCR съел пробел:
+`проектом.Предусмотреть` → `проектом. Предусмотреть`. Шаблон
+`(?<=[^\W\d_]{2})\.(?=[А-ЯЁ])` — слева от точки **две буквы подряд** (алфавит
+любой, цифры и `_` не считаются), справа — **заглавная кириллическая**.
+
+Всё остальное не трогается, и это намеренно:
+
+| Осталось как было | Почему |
+|---|---|
+| `И.М. Халиуллин`, `т.е.Х` | слева одна буква — инициал или сокращение |
+| `1.3.4.Требования` | слева цифра — нумерация пункта |
+| `Windows 8.1` | справа цифра |
+| `в т.ч.дистрибутивы` | справа строчная — сокращение, а не новое предложение |
+| `компания».Юридический` | слева кавычка, а не буква |
+
+На `vlm.md` правило чинит два места (`Ethernet.Для`, `ПО.Работы`), на сыром
+`vlm_raw.zip/full.md` — десять. То же правило — правка 9 сборки `golden.md`
+(спека 00), поэтому в остаток метрики оно не попадает.
+
 ### 6. `fix_mixed_alphabet`
 
 Токен — максимальная последовательность букв и цифр (дефис делит токены).
@@ -179,7 +201,7 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 
 ### 9. `postprocess`
 
-Порядок: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → `cleanup_ocr_markdown`. Находки — в
+Порядок: 1 → 2 → 3 → 4 → 5 → 5b → 6 → 7 → 8 → `cleanup_ocr_markdown`. Находки — в
 порядке получения. `cleanup_ocr_markdown` вызывается последним и как есть.
 
 ## Приёмочные тесты (`tests/test_ocr_postprocess.py`)
@@ -191,7 +213,8 @@ rules = [f.rule for f in findings]
 
 # метрика: не хуже эталонной и детерминированное ушло
 assert count_diffs(out, golden) <= VLM_TO_GOLDEN_DIFFS          # из tests/test_ocr_fixtures.py
-assert count_diffs(out, golden) <= 5     # остаток: сыручими, IR-, 3 опкода на 5 подписях
+assert count_diffs(out, golden) <= 6     # остаток: сыручими, IR-, 3 опкода на 5 подписях,
+                                         # «(персональныйкомпьютер,» (правка 10, ПРАВКА #72)
 assert postprocess(out)[0] == out                               # идемпотентность
 
 # починено
@@ -204,6 +227,11 @@ assert "РоЕ" not in out and out.count("PoE") == 2
 assert "сыручими" in out and "сыпучими" not in out
 assert "IR-камерами" in out
 assert "A.II. Taipov" in out and "P.P. Hypeeb" in out
+assert "(персональныйкомпьютер," in out      # ПРАВКА #72: тракт слова не режет
+
+# починено правилом 5b (ПРАВКА #72)
+assert "RS-485,Ethernet. Для" in out and "и ПО. Работы," in out
+assert "в т.ч.дистрибутивы" in out and "Приложение 1.План" in out
 
 # таблица
 assert "<table" not in out and "<td" not in out
@@ -296,6 +324,13 @@ assert merge_split_tables(wide2) == (wide2, [])      # ширина не та �
 assert fix_list_glue("на:- один;- два") == "на: - один; - два"
 assert fix_list_glue("+-30кг, 60 т. +- 50кг") == "+-30кг, 60 т. +- 50кг"
 assert fix_list_glue("|:---|---:|") == "|:---|---:|"
+
+# fix_sentence_glue (ПРАВКА #72)
+assert fix_sentence_glue("проектом.Предусмотреть") == "проектом. Предусмотреть"
+assert fix_sentence_glue("Ethernet.Для и ПО.Работы") == "Ethernet. Для и ПО. Работы"
+for same in ("И.М. Халиуллин", "т.е.Х", "1.3.4.Требования", "Windows 8.1",
+             "в т.ч.дистрибутивы", "компания».Юридический", "A.II. Taipov"):
+    assert fix_sentence_glue(same) == same
 
 # fix_numero / fix_degree
 assert fix_numero("No1, No 12, No.7, Noп/п") == "№ 1, № 12, № 7, № п/п"

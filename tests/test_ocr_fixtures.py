@@ -17,10 +17,12 @@ REPO_DIR = FIXTURES.parents[2]
 # Фактическое значение, снятое исполнителем спеки 00; расчётное в спеке — 14.
 # ПРАВКА #68: было 12, стало 76 — правка 8 («;-» → «; -») разводит 66 склеек на
 # два токена. 64 из них дают свой опкод, две попали внутрь соседних («°C;-» и
-# «РоЕ;-»). Разбор — в docs/docx_converter_docs_sync.md, «Метрика vlm→golden».
-VLM_TO_GOLDEN_DIFFS = 76
+# «РоЕ;-»). ПРАВКА #72: 76 → 79 — правка 9 («Ethernet.Для», «ПО.Работы») даёт два
+# опкода, правка 10 («(персональныйкомпьютер,») — один.
+# Разбор — в docs/docx_converter_docs_sync.md, «Метрика vlm→golden».
+VLM_TO_GOLDEN_DIFFS = 79
 # golden.md вне git — sha ловит тихую подмену эталона.
-GOLDEN_SHA256 = "fb82493f8eb9b6de21d5f77e8cfff7199a260eccfb7a465b183bb02afd78c87b"
+GOLDEN_SHA256 = "ce357ca6c32be25943a0d265ed6e14191bc03338ddd9a4287b1835d706e6bdf2"
 
 
 def test_metric_and_golden_unchanged():
@@ -80,6 +82,29 @@ def test_fix_8_list_glue():
     # 5 своих у vlm + 66 разведённых правкой 8 + 2 стыка, где правка 7 дописала
     # продолжение таблицы через пробел к ячейке, кончавшейся на «;»
     assert len(re.findall(r"[;:] -", golden)) == len(re.findall(r"[;:] -", vlm)) + 66 + 2
+
+
+def test_fix_9_sentence_glue():
+    """ПРАВКА #72: правка 9 — точка между предложениями разводится пробелом."""
+    vlm, golden = read_fixture("vlm.md"), read_fixture("golden.md")
+    glue = r"(?<=[^\W\d_]{2})\.(?=[А-ЯЁ])"
+    assert len(re.findall(glue, vlm)) == 2                     # «Ethernet.Для», «ПО.Работы»
+    assert not re.search(glue, golden)
+    assert "RS-485,Ethernet. Для" in golden and "и ПО. Работы," in golden
+    # соседние точки под правило не попали и остались слитными
+    assert "в т.ч.дистрибутивы" in golden                      # справа строчная
+    assert "компания».Юридический" in golden                   # слева кавычка
+    assert "Приложение 1.План" in golden                       # слева цифра
+
+
+def test_fix_10_row_tail_space():
+    """ПРАВКА #72: правка 10 — хвост строки 13 пристыкован через пробел, как склеивает #69."""
+    vlm, golden = read_fixture("vlm.md"), read_fixture("golden.md")
+    assert "(персональныйкомпьютер," in vlm                    # в исходнике слитно
+    assert golden.count("(персональный компьютер,") == 1
+    assert "(персональныйкомпьютер," not in golden
+    # «Программно-техническийкомплекс» склеен в самом vlm.md — не трогаем
+    assert "Программно-техническийкомплекс" in golden
 
 
 def test_live_marker_needs_explicit_flag():

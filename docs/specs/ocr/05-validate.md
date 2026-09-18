@@ -1,6 +1,6 @@
 # 05 — Валидатор и отчёт
 
-**# ПРАВКА #64** (+ #70). Зависит от: 04 (`Finding`, `parse_pipe_tables`, `fold_to_cyrillic`).
+**# ПРАВКА #64** (+ #70, #72). Зависит от: 04 (`Finding`, `parse_pipe_tables`, `fold_to_cyrillic`).
 
 ## Цель
 
@@ -82,9 +82,17 @@ def strip_annotations(md: str) -> str: ...
 `page_idx` с нуля. Возвращает `page_idx + 1` первого блока, у которого в `text` или в
 `table_body` (после снятия тегов и схлопывания пробелов) содержится `snippet`
 (тоже со схлопнутыми пробелами). Нет `content_list`, не нашлось, у блока нет
-`page_idx` → `None`. PLACEHOLDER: форма блока — по доке, реального
-`content_list.json` в фикстурах нет; после live-прогона спеки 02 (`vlm_raw.zip`)
-добавить тест на настоящем файле.
+`page_idx` → `None`.
+
+**ПРАВКА #72: PLACEHOLDER 3 закрыт.** Форма блока сверена с настоящим
+`content_list.json` из `vlm_raw.zip` (живой прогон `vlm`, 35 блоков). В архиве
+файл лежит под именем `<uuid>_content_list.json` — так его и ищет
+`result_from_zip` (`n.endswith("content_list.json")`), `content_list_v2.json`
+под этот хвост не попадает. Дока подтвердилась: у каждого блока есть `type` и
+`page_idx` (с нуля), текст лежит во взаимоисключающих `text` / `table_body`;
+сверх них встречаются `bbox`, `img_path`, `text_level`, `table_caption`,
+`table_footnote` — `page_of` их не читает. Тест — на настоящем файле, синтетика
+рядом остаётся (она проверяет краевые случаи, которых в архиве нет).
 
 ### Правила
 
@@ -170,7 +178,16 @@ assert sum(report["summary"].values()) == len(report["findings"])
 assert set(report["summary"]) == {"critical", "warning", "info"}
 assert json.loads(json.dumps(report, ensure_ascii=False)) == report
 
-# страницы
+# страницы: настоящий content_list живого прогона (ПРАВКА #72, PLACEHOLDER 3)
+names = [n for n in zipfile.ZipFile(require_fixture("vlm_raw.zip")).namelist()
+         if n.endswith("content_list.json")]
+assert len(names) == 1
+real = json.loads(zipfile.ZipFile(require_fixture("vlm_raw.zip")).read(names[0]).decode("utf-8"))
+assert all("page_idx" in b and "type" in b for b in real)
+assert page_of("сыручими", real) == 2 and page_of("A.II. Taipov", real) == 9
+assert page_of("такого в документе нет", real) is None
+
+# страницы: синтетика на краевые случаи
 cl = [{"type": "text", "text": "P.P. Hypeeb", "page_idx": 8},
       {"type": "table", "table_body": "<table><tr><td>сыручими  и</td></tr></table>", "page_idx": 1}]
 assert page_of("P.P. Hypeeb", cl) == 9 and page_of("сыручими и", cl) == 2

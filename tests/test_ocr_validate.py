@@ -5,8 +5,9 @@
 """
 
 import json
+import zipfile
 
-from ocr_fixtures import read_fixture
+from ocr_fixtures import read_fixture, require_fixture
 from ocr.postprocess import html_tables_to_pipe, parse_pipe_tables, postprocess
 from ocr.validate import (ANNOTATION_PREFIX, LOST_HEADING, annotate, build_report,
                           page_of, strip_annotations, validate)
@@ -74,6 +75,25 @@ def test_pages_from_content_list():
     r2 = build_report(source="s", sha256="0" * 64, provider="mineru", model_version="vlm",
                       cache_hit=True, verified=False, findings=post, content_list=cl)
     assert next(f for f in r2["findings"] if f["snippet"] == "P.P. Hypeeb")["page"] == 9
+
+
+def test_pages_from_real_content_list():
+    """PLACEHOLDER 3 спеки 05 закрыт: page_of проверен на настоящем content_list.json.
+
+    Архив живого прогона vlm кладёт файл под именем «<uuid>_content_list.json» —
+    так его и ищет result_from_zip. Форма блока совпала с докой: type, page_idx
+    (с нуля) и взаимоисключающие text / table_body; сверх них — bbox, img_path,
+    text_level, table_caption, table_footnote.
+    """
+    with zipfile.ZipFile(require_fixture("vlm_raw.zip")) as archive:
+        names = [n for n in archive.namelist() if n.endswith("content_list.json")]
+        assert len(names) == 1, names
+        content_list = json.loads(archive.read(names[0]).decode("utf-8"))
+
+    assert all("page_idx" in block and "type" in block for block in content_list)
+    assert page_of("сыручими", content_list) == 2          # абзац стр. 2
+    assert page_of("A.II. Taipov", content_list) == 9      # блок подписей, стр. 9
+    assert page_of("такого в документе нет", content_list) is None
 
 
 def test_annotations():
