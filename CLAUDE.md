@@ -161,7 +161,7 @@ Documented long-standing limits: column alignment from `:----` separators is not
 Смысл исходника не меняется: чинятся только известные артефакты OCR, остальное помечается.
 
 **Вызов (из корня репозитория):**
-`python -m ocr.cli ВХОД.pdf --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--cache local|drive]`
+`python -m ocr.cli ВХОД.pdf --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--annotate-all] [--cache local|drive]`
 
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
 Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
@@ -174,7 +174,9 @@ Documented long-standing limits: column alignment from `:----` separators is not
 
 **Флаги:** `--verify` — второй прогон другим движком MinerU, расхождения → находки `low_confidence`
 (дольше, вдвое больше квоты). `--annotate` — находки вставлены в `out.md` как `!! ПРОВЕРИТЬ: … !!`;
-перед конвертацией в DOCX снять через `ocr.validate.strip_annotations`.
+перед конвертацией в DOCX снять через `ocr.validate.strip_annotations`. `low_confidence` в текст
+не вставляются (их десятки, в `report.json` они есть все) — для полной картины `--annotate-all`.
+Находки, чей фрагмент в тексте не нашёлся, уходят в конец файла, в раздел «Не привязанные находки».
 `--cache drive` пока не реализован.
 
 **report.json:** `findings[]` = `{id, rule, severity, page, snippet, suggestion}`.

@@ -9,9 +9,11 @@ from ocr.diff import SNIPPET_MAX, diff_findings, normalize
 from ocr.postprocess import postprocess
 from ocr.validate import annotate, build_report, strip_annotations
 
-# PLACEHOLDER: верхняя граница числа находок low_confidence на паре фикстур —
-# факт 212 (vlm против pipeline) + 10 %; человек решает, годится ли шум для --verify
-MAX_FINDINGS = 233
+# ПРАВКА #70: число находок low_confidence на паре фикстур. Было 212 при
+# пословном выравнивании: три четверти давали потерянные на переносах пробелы.
+# Посимвольная сверка их не видит, остаток — 65 настоящих расхождений прогонов.
+# Вход фиксированный, поэтому число точное, а не граница.
+FIXTURE_FINDINGS = 65
 
 
 def run_pair():
@@ -42,7 +44,7 @@ def test_finding_contract():
 
 def test_noise_level():
     a, b, fs = run_pair()
-    assert len(fs) <= MAX_FINDINGS
+    assert len(fs) == FIXTURE_FINDINGS
     # совпадающее не шумит: ОГРН оба прогона прочитали одинаково
     assert not [f for f in fs if "1020202283287" in f.snippet]
 
@@ -63,15 +65,18 @@ def test_page_from_content_list():
 
 
 def test_normalize():
-    assert normalize("No384-ФЗ") == normalize("№ 384-ФЗ") == "№ 384 фз"
+    """ПРАВКА #70: пробелов в результате нет — сверяются последовательности символов."""
+    assert normalize("No384-ФЗ") == normalize("№ 384-ФЗ") == "№384фз"
     assert normalize("Noп/п") == normalize("№ п/п")
     assert normalize("IР54") == normalize("IP54")               # кир. Р против лат. P
     assert normalize("«НПФ»  БЗК") == normalize("НПф БЗК")
-    assert normalize("Ёлка,  ёж.") == "елка еж"
+    assert normalize("Ёлка,  ёж.") == "елкаеж"
     assert normalize("№384") == normalize("№ 384")
+    # разбивка на слова больше не различает стороны — ради этого всё и затевалось
+    assert normalize("твердыми, сыпучими") == normalize("твердыми,сыпучими")
 
 
-def test_word_level_alignment():
+def test_token_level_alignment():
     f = diff_findings("Груз сыручими и жидкими.", "Груз твердыми,сыпучими и жидкими.")
     assert [(x.snippet, x.suggestion) for x in f] == [("сыручими", "твердыми,сыпучими")]
     assert diff_findings("| 1 | а |\n|---|---|\n| 2 | б |", "1 а 2 б") == []  # разметка не шум
@@ -84,3 +89,11 @@ def test_word_level_alignment():
 def test_snippet_cut_on_token_boundary():
     long = diff_findings(" ".join(f"а{i}" for i in range(100)), "совсем другое")
     assert len(long[0].snippet) <= SNIPPET_MAX and not long[0].snippet.endswith(" ")
+
+
+def test_short_divergence_is_not_a_finding():
+    """ПРАВКА #70: расхождение короче трёх символов — джиттер OCR, не находка."""
+    assert diff_findings("код и цифра 5", "код в цифра 6") == []
+    assert [f.snippet for f in diff_findings("код или цифра", "код либо цифра")] == ["или"]
+    # разошёлся только «№» — ни буквы, ни цифры, находки нет
+    assert diff_findings("пункт № 12", "пункт 12") == []

@@ -163,7 +163,10 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 `^\s*[A-Za-zА-ЯЁ]\.\s?[A-Za-zА-ЯЁ]{1,3}\.\s+[A-Za-zА-Яа-яЁё-]+\s*$`,
 в которой есть хотя бы одна латинская буква → `translit_suspect`. `snippet` —
 строка без краевых пробелов; `suggestion` — `fold_to_cyrillic(строка)`, если все
-латинские буквы свернулись, иначе `None`. Текст не меняется. Детектор намеренно
+латинские буквы свернулись, иначе `None`. **ПРАВКА #70:** свёртка дала `І`/`і`
+(украинская буква из латинской `I`) — `suggestion=None`. `A.II.` и `A.III.` —
+это разобранная на палки `Ш`, а «А.ІІІ.» в инициалах заведомо не то; гадать
+тракт не имеет права. Текст не меняется. Детектор намеренно
 узкий — только ФИО с инициалами; общий поиск транслита по тексту без словаря
 даёт шум на `Ethernet`, `Windows`, `Parsec`.
 
@@ -230,6 +233,8 @@ tr = {f.snippet: f for f in findings if f.rule == "translit_suspect"}
 assert tr["A.P. Сиражитдинов"].suggestion == "А.Р. Сиражитдинов"
 assert tr["E.K. Кустова"].suggestion == "Е.К. Кустова"
 assert tr["P.P. Hypeeb"].suggestion is None                     # 'b', 'y' без пары — не гадать
+assert tr["A.II. Taipov"].suggestion is None                    # ПРАВКА #70: «І» в инициалах
+assert tr["A.III. Ямалов"].suggestion is None
 assert all(f.severity == "critical" for f in tr.values())
 for f in findings:
     assert f.snippet in out or f.rule in ("table_merged", "table_span")

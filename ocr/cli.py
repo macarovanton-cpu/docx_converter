@@ -60,6 +60,7 @@ def _mineru_result(pdf_bytes: bytes, model_version: str, *, work_dir: Path,
 def run_pipeline(pdf_bytes: bytes, *, source_name: str, work_dir: Path,
                  engine: str = "mineru", mode: str = "vlm",
                  verify: bool = False, annotate: bool = False,
+                 annotate_all: bool = False,
                  cache: "CacheBackend | None" = None,
                  provider_factory=None) -> tuple[str, dict]:
     """Весь тракт: OCR -> постпроцессор -> валидатор -> (сверка) -> (markdown, report).
@@ -96,7 +97,9 @@ def run_pipeline(pdf_bytes: bytes, *, source_name: str, work_dir: Path,
                           provider=engine, model_version=model_version,
                           cache_hit=cache_hit, verified=verify,
                           findings=findings, content_list=result.content_list)
-    return (annotate_md(md, report) if annotate else md), report
+    if annotate or annotate_all:          # ПРАВКА #70: --annotate-all включает и пометки
+        md = annotate_md(md, report, include_low_confidence=annotate_all)
+    return md, report
 
 
 def _parse_args(argv: "list[str] | None") -> argparse.Namespace:
@@ -113,6 +116,8 @@ def _parse_args(argv: "list[str] | None") -> argparse.Namespace:
                         help="второй прогон другим движком MinerU, расхождения -> находки")
     parser.add_argument("--annotate", action="store_true",
                         help="вставить находки в out.md как «!! ПРОВЕРИТЬ: … !!»")
+    parser.add_argument("--annotate-all", action="store_true",
+                        help="то же, но вместе с low_confidence (их десятки)")
     parser.add_argument("--cache", default="local", choices=("local", "drive"),
                         help="бэкенд кэша сырого ответа (по умолчанию local)")
     return parser.parse_args(argv)
@@ -131,7 +136,8 @@ def main(argv: "list[str] | None" = None, *, provider_factory=None) -> int:
         md, report = run_pipeline(pdf_bytes, source_name=source.name,
                                   work_dir=out_dir, engine=args.engine,
                                   mode=args.mode, verify=args.verify,
-                                  annotate=args.annotate, cache=cache,
+                                  annotate=args.annotate,
+                                  annotate_all=args.annotate_all, cache=cache,
                                   provider_factory=provider_factory)
         # пишем только после успешного тракта: недописанный out.md хуже отсутствующего
         out_dir.mkdir(parents=True, exist_ok=True)

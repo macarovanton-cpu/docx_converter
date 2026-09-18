@@ -464,7 +464,12 @@ def flag_translit(md: str) -> list[Finding]:
         if not NAME_RE.match(line) or not any(_is_latin(char) for char in line):
             continue
         snippet = line.strip()
-        findings.append(_finding("translit_suspect", snippet, fold_to_cyrillic(snippet)))
+        suggestion = fold_to_cyrillic(snippet)
+        # ПРАВКА #70: «A.III.» свернулось бы в «А.ІІІ.» — украинское І в русских
+        # инициалах заведомо не то, там разобранная на палки «Ш». Не гадаем.
+        if suggestion is not None and ("І" in suggestion or "і" in suggestion):
+            suggestion = None
+        findings.append(_finding("translit_suspect", snippet, suggestion))
     return findings
 
 

@@ -82,6 +82,9 @@ def test_findings():
     assert tr["A.P. Сиражитдинов"].suggestion == "А.Р. Сиражитдинов"
     assert tr["E.K. Кустова"].suggestion == "Е.К. Кустова"
     assert tr["P.P. Hypeeb"].suggestion is None                 # 'b', 'y' без пары — не гадать
+    # ПРАВКА #70: «II»/«III» свернулись бы в украинское «І» — это не инициалы
+    assert tr["A.II. Taipov"].suggestion is None
+    assert tr["A.III. Ямалов"].suggestion is None
     assert all(f.severity == "critical" for f in tr.values())
     for f in findings:
         assert f.snippet in out or f.rule in ("table_merged", "table_span")

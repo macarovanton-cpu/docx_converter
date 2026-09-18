@@ -8,8 +8,8 @@ import json
 
 from ocr_fixtures import read_fixture
 from ocr.postprocess import html_tables_to_pipe, parse_pipe_tables, postprocess
-from ocr.validate import (ANNOTATION_PREFIX, annotate, build_report, page_of,
-                          strip_annotations, validate)
+from ocr.validate import (ANNOTATION_PREFIX, LOST_HEADING, annotate, build_report,
+                          page_of, strip_annotations, validate)
 
 # правила 05, которые на чистом vlm молчать обязаны
 QUIET_ON_VLM = ("ogrn_checksum", "inn_checksum", "gost_format", "unit_unknown",
@@ -90,23 +90,47 @@ def test_annotations():
     assert ann.split("\n\n").index(block) == ann.split("\n\n").index("P.P. Hypeeb") + 1
 
 
+def _low(id_, snippet, suggestion=None):
+    return {"id": id_, "rule": "low_confidence", "severity": "warning", "page": None,
+            "snippet": snippet, "suggestion": suggestion}
+
+
 def test_annotations_synthetic():
     assert strip_annotations("!! E = mc2 !!\n\nТекст") == "!! E = mc2 !!\n\nТекст"
-    lost = annotate("Абзац.", {"findings": [
-        {"id": 1, "rule": "low_confidence", "severity": "warning", "page": None,
-         "snippet": "нет в тексте", "suggestion": None}]})
+
+    all_ = dict(include_low_confidence=True)
+    lost = annotate("Абзац.", {"findings": [_low(1, "нет в тексте")]}, **all_)
     assert lost.endswith("!! ПРОВЕРИТЬ: [1] low_confidence: нет в тексте !!")
     assert strip_annotations(lost) == "Абзац."
 
     long_text = "я" * 300
-    one = annotate("Абзац.", {"findings": [
-        {"id": 2, "rule": "low_confidence", "severity": "warning", "page": None,
-         "snippet": "Абзац.", "suggestion": "а\nб"}]})
+    one = annotate("Абзац.", {"findings": [_low(2, "Абзац.", "а\nб")]}, **all_)
     assert one == "Абзац.\n\n!! ПРОВЕРИТЬ: [2] low_confidence: а б !!"
-    cut = annotate("Абзац.", {"findings": [
-        {"id": 3, "rule": "low_confidence", "severity": "warning", "page": None,
-         "snippet": long_text, "suggestion": None}]})
+    cut = annotate("Абзац.", {"findings": [_low(3, long_text)]}, **all_)
     assert cut.endswith("я…" + " !!") and len(cut.split(": ", 2)[2]) == 200 + len(" !!")
+
+
+def test_low_confidence_skipped_by_default():
+    """ПРАВКА #70: в текст low_confidence попадают только по --annotate-all."""
+    report = {"findings": [_low(1, "Абзац."),
+                           {"id": 2, "rule": "translit_suspect", "severity": "critical",
+                            "page": None, "snippet": "Абзац.", "suggestion": None}]}
+    assert annotate("Абзац.", report) == "Абзац.\n\n!! ПРОВЕРИТЬ: [2] translit_suspect: Абзац. !!"
+    assert annotate("Абзац.", report, include_low_confidence=True).count(ANNOTATION_PREFIX) == 2
+
+
+def test_lost_findings_go_to_the_tail():
+    """ПРАВКА #70: не найденный якорь — в конец, своим разделом, а не в шапку."""
+    md = "# Шапка\n\nТело."
+    report = {"findings": [_low(1, "нет в тексте"), _low(2, "")]}
+    ann = annotate(md, report, include_low_confidence=True)
+    assert ann.startswith(md)                            # шапку и тело не тронули
+    blocks = ann.split("\n\n")
+    assert blocks[2] == LOST_HEADING and len(blocks) == 5
+    assert strip_annotations(ann) == md                  # заголовок раздела снимается вместе
+    # свой такой же заголовок в документе — не наш, не трогаем
+    own = "## Не привязанные находки\n\nТекст."
+    assert strip_annotations(own) == own
 
 
 # --- синтетика: по тесту на правило -----------------------------------------

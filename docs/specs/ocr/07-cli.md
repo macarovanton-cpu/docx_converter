@@ -1,6 +1,6 @@
 # 07 — CLI для агента
 
-**# ПРАВКА #66.** Зависит от: 01–06. Последняя спека автономного прогона.
+**# ПРАВКА #66** (+ #67, #70). Зависит от: 01–06. Последняя спека автономного прогона.
 
 ## Цель
 
@@ -24,7 +24,7 @@
 python -m ocr.cli INPUT.pdf --out DIR
                   [--engine mineru|ocrmypdf]   (по умолчанию mineru)
                   [--mode vlm|pipeline]        (по умолчанию vlm; для ocrmypdf игнорируется)
-                  [--verify] [--annotate]
+                  [--verify] [--annotate] [--annotate-all]
                   [--cache local|drive]        (по умолчанию local)
 ```
 
@@ -40,6 +40,7 @@ EXIT_OK, EXIT_ERROR, EXIT_CRITICAL = 0, 1, 2
 def run_pipeline(pdf_bytes: bytes, *, source_name: str, work_dir: Path,
                  engine: str = "mineru", mode: str = "vlm",
                  verify: bool = False, annotate: bool = False,
+                 annotate_all: bool = False,             # ПРАВКА #70
                  cache: CacheBackend | None = None,
                  provider_factory=None) -> tuple[str, dict]: ...
 
@@ -75,7 +76,9 @@ if __name__ == "__main__":
 6. `report = build_report(source=source_name, sha256=…, provider="mineru",
    model_version=mode, cache_hit=<попадание основного прогона>, verified=verify,
    findings=f_post + f_val + f_diff, content_list=result.content_list)`.
-7. `annotate` → `md = annotate(md, report)`. Возврат `(md, report)`.
+7. `annotate` или `annotate_all` → `md = annotate(md, report,
+   include_low_confidence=annotate_all)`. Возврат `(md, report)`. `--annotate-all`
+   включает пометки сам: отдельно писать `--annotate` не нужно (ПРАВКА #70).
 
 ### engine `ocrmypdf`
 
@@ -128,7 +131,7 @@ if __name__ == "__main__":
 Смысл исходника не меняется: чинятся только известные артефакты OCR, остальное помечается.
 
 **Вызов (из корня репозитория):**
-`python -m ocr.cli ВХОД.pdf --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--cache local|drive]`
+`python -m ocr.cli ВХОД.pdf --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--annotate-all] [--cache local|drive]`
 
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
 Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
@@ -141,7 +144,9 @@ if __name__ == "__main__":
 
 **Флаги:** `--verify` — второй прогон другим движком MinerU, расхождения → находки `low_confidence`
 (дольше, вдвое больше квоты). `--annotate` — находки вставлены в `out.md` как `!! ПРОВЕРИТЬ: … !!`;
-перед конвертацией в DOCX снять через `ocr.validate.strip_annotations`.
+перед конвертацией в DOCX снять через `ocr.validate.strip_annotations`. `low_confidence` в текст
+не вставляются (их десятки, в `report.json` они есть все) — для полной картины `--annotate-all`.
+Находки, чей фрагмент в тексте не нашёлся, уходят в конец файла, в раздел «Не привязанные находки».
 `--cache drive` пока не реализован.
 
 **report.json:** `findings[]` = `{id, rule, severity, page, snippet, suggestion}`.
@@ -200,6 +205,13 @@ assert calls == ["vlm", "pipeline"]                               # оба уж�
 md_a, report_a = run_pipeline(pdf, annotate=True, **kw)
 assert strip_annotations(md_a) == md
 assert md_a.count("!! ПРОВЕРИТЬ: ") == len(report_a["findings"])
+
+# --annotate-all: low_confidence в текст только по нему (ПРАВКА #70)
+md_v, report_v = run_pipeline(pdf, verify=True, annotate=True, **kw)
+md_all, _ = run_pipeline(pdf, verify=True, annotate_all=True, **kw)
+low = [f for f in report_v["findings"] if f["rule"] == "low_confidence"]
+assert low and md_v.count("!! ПРОВЕРИТЬ: ") == len(report_v["findings"]) - len(low)
+assert md_all.count("!! ПРОВЕРИТЬ: ") == len(report_v["findings"])
 
 # без кэша
 calls.clear()

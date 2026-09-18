@@ -110,6 +110,24 @@ def test_annotate_marks_every_finding(tmp_path):
     assert md_a.count("!! ПРОВЕРИТЬ: ") == len(report_a["findings"])
 
 
+def test_annotate_all_adds_low_confidence(tmp_path):
+    """ПРАВКА #70: --annotate обходит low_confidence, --annotate-all вставляет их."""
+    pdf, vlm, pipeline = fixtures()
+    fake, _ = make_fake(vlm=vlm, pipeline=pipeline)
+    kw = dict(source_name="bakeoff.pdf", work_dir=tmp_path / "w",
+              cache=LocalCache(tmp_path / "cache"), provider_factory=fake)
+
+    md, _ = run_pipeline(pdf, verify=True, **kw)
+    md_a, report = run_pipeline(pdf, verify=True, annotate=True, **kw)
+    md_all, _ = run_pipeline(pdf, verify=True, annotate_all=True, **kw)
+
+    low = [f for f in report["findings"] if f["rule"] == "low_confidence"]
+    assert low                                                    # сверка нашла расхождения
+    assert md_a.count("!! ПРОВЕРИТЬ: ") == len(report["findings"]) - len(low)
+    assert md_all.count("!! ПРОВЕРИТЬ: ") == len(report["findings"])
+    assert strip_annotations(md_a) == strip_annotations(md_all) == md
+
+
 def test_without_cache_provider_is_called_every_time(tmp_path):
     pdf, vlm, pipeline = fixtures()
     fake, calls = make_fake(vlm=vlm, pipeline=pipeline)

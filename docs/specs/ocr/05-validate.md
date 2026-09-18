@@ -1,6 +1,6 @@
 # 05 — Валидатор и отчёт
 
-**# ПРАВКА #64.** Зависит от: 04 (`Finding`, `parse_pipe_tables`, `fold_to_cyrillic`).
+**# ПРАВКА #64** (+ #70). Зависит от: 04 (`Finding`, `parse_pipe_tables`, `fold_to_cyrillic`).
 
 ## Цель
 
@@ -29,6 +29,7 @@ PLAN читается как «объединение находок 04 + 05 + 0
 REPORT_SCHEMA_VERSION = 1
 ANNOTATION_PREFIX = "!! ПРОВЕРИТЬ: "
 ANNOTATION_SUFFIX = " !!"
+LOST_HEADING = "## Не привязанные находки"       # ПРАВКА #70
 
 UNITS = ("мм", "см", "м", "км", "г", "кг", "т", "л", "шт", "В", "А", "Вт", "кВт",
          "кВА", "Гц", "лм", "ч", "с", "мин", "сут")
@@ -44,7 +45,8 @@ def build_report(*, source: str, sha256: str, provider: str,
                  findings: list[Finding],
                  content_list: list | None = None) -> dict: ...
 
-def annotate(md: str, report: dict) -> str: ...
+def annotate(md: str, report: dict, *,
+             include_low_confidence: bool = False) -> str: ...   # ПРАВКА #70
 def strip_annotations(md: str) -> str: ...
 ```
 
@@ -109,15 +111,22 @@ def strip_annotations(md: str) -> str: ...
   `!! ПРОВЕРИТЬ: [{id}] {rule}: {suggestion or snippet} !!`
   Это существующий синтаксис callout в `convert.py` (`text.startswith('!!') and text.endswith('!!')`);
   `convert.py` не трогать.
+- **ПРАВКА #70:** находки `low_confidence` по умолчанию в текст не идут — их на
+  документ десятки, и за ними не видно находок правил; в `report.json` они есть
+  целиком, а `include_low_confidence=True` (`--annotate-all`) возвращает их в текст.
 - Место: сразу после блока (разбиение по `\n\n`), в котором впервые встретился
   `snippet`. Блок — таблица → пометка после всей таблицы (внутрь таблицы callout
-  вставить нельзя). `snippet` не найден → пометка в конец документа; находка при
-  этом не теряется.
+  вставить нельзя). `snippet` не найден или пуст → пометка **в конец документа**,
+  в отдельный раздел `LOST_HEADING` (ПРАВКА #70: пустой `snippet` находится в
+  любом блоке, и пометка садилась первой строкой документа, в шапку). Находка
+  при этом не теряется.
 - Несколько находок на один блок — пометки подряд в порядке `id`.
 - Переводы строк внутри текста пометки → пробел; текст обрезается до 200 символов с `…`.
 - `strip_annotations` удаляет блоки, целиком совпадающие с
   `^!! ПРОВЕРИТЬ: .* !!$`, и восстанавливает разделители. Прочие callout-ы
-  (`!! формула !!`) не трогает.
+  (`!! формула !!`) не трогает. Блок `LOST_HEADING` снимается только когда после
+  него до конца документа одни пометки — то есть когда его поставил `annotate`;
+  такой же заголовок в тексте самого документа остаётся на месте.
 - Инвариант: `strip_annotations(annotate(md, report)) == md` для любого `md`,
   нормализованного `cleanup_ocr_markdown` (без тройных переводов строк).
 
@@ -179,9 +188,20 @@ block = next(b for b in ann.split("\n\n") if "translit_suspect" in b and "Hypeeb
 assert block.startswith("!!") and block.endswith("!!") and "\n" not in block
 assert ann.split("\n\n").index(block) == ann.split("\n\n").index("P.P. Hypeeb") + 1
 assert strip_annotations("!! E = mc2 !!\n\nТекст") == "!! E = mc2 !!\n\nТекст"
-lost = annotate("Абзац.", {"findings": [{"id": 1, "rule": "low_confidence", "severity": "warning",
-                                         "page": None, "snippet": "нет в тексте", "suggestion": None}]})
+low = {"id": 1, "rule": "low_confidence", "severity": "warning",
+       "page": None, "snippet": "нет в тексте", "suggestion": None}
+lost = annotate("Абзац.", {"findings": [low]}, include_low_confidence=True)
 assert lost.endswith("!! ПРОВЕРИТЬ: [1] low_confidence: нет в тексте !!")   # не потеряна
+
+# ПРАВКА #70: по умолчанию low_confidence в текст не идёт, непривязанное — в хвост
+assert annotate("Абзац.", {"findings": [low]}) == "Абзац."
+md2 = "# Шапка\n\nТело."
+ann2 = annotate(md2, {"findings": [low, dict(low, id=2, snippet="")]},
+                include_low_confidence=True)
+assert ann2.startswith(md2) and ann2.split("\n\n")[2] == LOST_HEADING
+assert strip_annotations(ann2) == md2
+own = "## Не привязанные находки\n\nТекст."
+assert strip_annotations(own) == own            # свой такой же заголовок не трогаем
 ```
 
 Синтетика — по тесту на правило:

@@ -10,6 +10,8 @@ from ocr.postprocess import fold_to_cyrillic, parse_pipe_tables
 REPORT_SCHEMA_VERSION = 1
 ANNOTATION_PREFIX = "!! ПРОВЕРИТЬ: "
 ANNOTATION_SUFFIX = " !!"
+# ПРАВКА #70: находки без места в тексте — в хвост документа, своим разделом
+LOST_HEADING = "## Не привязанные находки"
 
 UNITS = ("мм", "см", "м", "км", "г", "кг", "т", "л", "шт", "В", "А", "Вт", "кВт",
          "кВА", "Гц", "лм", "ч", "с", "мин", "сут")
@@ -303,15 +305,24 @@ def _split_blocks(md: str) -> tuple[list[str], str]:
     return body.split("\n\n"), md[len(body):]
 
 
-def annotate(md: str, report: dict) -> str:
-    """Пометки «!! ПРОВЕРИТЬ: … !!» отдельными блоками после места находки."""
+def annotate(md: str, report: dict, *, include_low_confidence: bool = False) -> str:
+    """Пометки «!! ПРОВЕРИТЬ: … !!» отдельными блоками после места находки.
+
+    ПРАВКА #70: `low_confidence` по умолчанию пропускаются — их на документ
+    десятки, и в тексте они забивают находки правил; отчёт их всё равно
+    содержит целиком, а `--annotate-all` возвращает их в текст. Находка, чей
+    фрагмент в документе не нашёлся, уходит в хвост под заголовок
+    LOST_HEADING — в начало документа ей нельзя, там она врезается в шапку.
+    """
     blocks, trailing = _split_blocks(md)
     after: dict[int, list[str]] = {}
     lost: list[str] = []
     for finding in sorted(report["findings"], key=lambda f: f["id"]):
+        if finding["rule"] == "low_confidence" and not include_low_confidence:
+            continue
         note = _annotation(finding)
         index = next((i for i, block in enumerate(blocks)
-                      if finding["snippet"] in block), None)
+                      if finding["snippet"] and finding["snippet"] in block), None)
         if index is None:
             lost.append(note)                    # находка не теряется
         else:
@@ -320,11 +331,17 @@ def annotate(md: str, report: dict) -> str:
     for index, block in enumerate(blocks):
         out.append(block)
         out += after.get(index, [])
-    return "\n\n".join(out + lost) + trailing
+    if lost:
+        out += [LOST_HEADING] + lost
+    return "\n\n".join(out) + trailing
 
 
 def strip_annotations(md: str) -> str:
     """Снять пометки валидатора; прочие callout-ы («!! формула !!») не трогать."""
     blocks, trailing = _split_blocks(md)
     kept = [block for block in blocks if not _ANNOTATION_RE.fullmatch(block)]
+    if LOST_HEADING in blocks:
+        tail = blocks[blocks.index(LOST_HEADING) + 1:]
+        if tail and all(_ANNOTATION_RE.fullmatch(block) for block in tail):
+            kept.remove(LOST_HEADING)            # заголовок поставил annotate
     return "\n\n".join(kept) + trailing
