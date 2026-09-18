@@ -5,9 +5,14 @@
 """
 
 import hashlib
+import os
 import re
+import subprocess
+import sys
 
-from ocr_fixtures import count_diffs, read_fixture, require_fixture, text_tokens
+from ocr_fixtures import FIXTURES, count_diffs, read_fixture, require_fixture, text_tokens
+
+REPO_DIR = FIXTURES.parents[2]
 
 # Фактическое значение, снятое исполнителем спеки 00; расчётное в спеке — 14.
 # ПРАВКА #68: было 12, стало 76 — правка 8 («;-» → «; -») разводит 66 склеек на
@@ -75,6 +80,18 @@ def test_fix_8_list_glue():
     # 5 своих у vlm + 66 разведённых правкой 8 + 2 стыка, где правка 7 дописала
     # продолжение таблицы через пробел к ячейке, кончавшейся на «;»
     assert len(re.findall(r"[;:] -", golden)) == len(re.findall(r"[;:] -", vlm)) + 66 + 2
+
+
+def test_live_marker_needs_explicit_flag():
+    """ПРАВКА #71: ключ в окружении сеть не включает — включает только MINERU_LIVE=1."""
+    env = dict(os.environ, MINERU_API_KEY="k-не-используется")
+    env.pop("MINERU_LIVE", None)
+    run = subprocess.run(
+        [sys.executable, "-X", "utf8", "-m", "pytest", "-m", "live", "-q", "-rs",
+         "-p", "no:cacheprovider"],
+        cwd=REPO_DIR, env=env, capture_output=True, text=True, encoding="utf-8")
+    assert run.returncode == 0, run.stdout                 # сеть не тронута
+    assert "skipped" in run.stdout and "MINERU_LIVE=1" in run.stdout
 
 
 def test_text_tokens_strips_markup():
