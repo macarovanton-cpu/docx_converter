@@ -64,9 +64,35 @@ streamlit run app.py
 
 OCR-режим `auto` реализован и подключён к UI, но `ocrmypdf` **не** добавлен в `requirements.txt`, и файла `packages.txt` нет. На Streamlit Community Cloud из-за этого недоступны системные Tesseract/Ghostscript, поэтому OCR-режим `auto` на проде сейчас падает. Это открытый вопрос, который решается отдельной задачей о пакетировании. В рамках текущей документационной правки в `requirements.txt` / `packages.txt` ничего не добавляем.
 
+## OCR CLI (инструмент для агента)
+
+**Назначение:** тендерный PDF (в т.ч. скан) → Markdown со структурой + отчёт о сомнительных местах.
+Смысл исходника не меняется: чинятся только известные артефакты OCR, остальное помечается.
+
+**Вызов (из корня репозитория):**
+`python -m ocr.cli ВХОД.pdf --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--cache local|drive]`
+
+**Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
+Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
+
+**Выход:** `ПАПКА/out.md`, `ПАПКА/report.json`, в stdout — одна строка JSON:
+`{"status","out_md","report","cache_hit","findings":{"critical","warning","info"},"error"}`.
+
+**Коды выхода:** `0` — критичных находок нет; `2` — есть критичные находки, `out.md` написан,
+читать `report.json`; `1` — тракт не отработал, читать `error`.
+
+**Флаги:** `--verify` — второй прогон другим движком MinerU, расхождения → находки `low_confidence`
+(дольше, вдвое больше квоты). `--annotate` — находки вставлены в `out.md` как `!! ПРОВЕРИТЬ: … !!`;
+перед конвертацией в DOCX снять через `ocr.validate.strip_annotations`.
+`--cache drive` пока не реализован.
+
+**report.json:** `findings[]` = `{id, rule, severity, page, snippet, suggestion}`.
+`snippet` — дословный фрагмент `out.md`; `suggestion` — что предлагает тракт или что увидел второй прогон;
+`page` — страница PDF или `null`.
+
 ## Архитектура
 
-Семь Python-модулей:
+Семь Python-модулей и пакет `ocr/`:
 
 - **`app.py`** — Streamlit UI. Содержит режимы `Markdown -> DOCX` и `Файлы -> Markdown`. В первом режиме загружает `.docx` шаблон с Google Drive через service account, вызывает `convert_md_to_docx`, отдаёт результат на скачивание. Во втором режиме принимает несколько файлов, вызывает `pdf_core`/MarkItDown-слой и отдаёт `.md`/ZIP на скачивание.
 - **`convert.py`** — ядро Markdown → DOCX (1316 строк). Единственная публичная функция: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`.
@@ -75,6 +101,7 @@ OCR-режим `auto` реализован и подключён к UI, но `oc
 - **`ocr_auto_mode.py`** — оркестратор «OCR или нет» (`convert_pdf_with_optional_ocr`): по диагностике страниц решает, гнать ли PDF через OCR, с учётом выбранного диапазона страниц.
 - **`ocr_converter.py`** — обёртка OCRmyPDF через `subprocess` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`).
 - **`pdf_core.py`** — провайдеро-независимое ядро PDF → Markdown. Публичные функции: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider)` и `pdf_to_markdown_with_status(...)` (последнюю использует `app.py` — UI показывает `ocr_status`). Берёт на себя работу с bytes/tempfile, не зависит от Streamlit. Определяет протокол `OcrProvider` с одной реализацией — `OcrmypdfProvider`; при `provider=None` маршрутизирует через `ocr_auto_mode.convert_pdf_with_optional_ocr` без изменений в поведении.
+- **`ocr/`** — тракт MinerU (общие типы — `ocr/__init__.py`): `mineru_provider.py` (#61, облачный API v4 за протоколом `OcrProvider`, `result_from_zip` без сети), `cache.py` (#62, кэш сырого zip + `meta.json`), `postprocess.py` (#63, детерминированная чистка markdown), `validate.py` (#64, проверки + `report.json` + пометки), `diff.py` (#65, сверка прогонов `vlm`/`pipeline`), `cli.py` (#66, `python -m ocr.cli`: `run_pipeline` + `main`).
 
 OCR-тракт (режим `auto`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter` (subprocess `ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` по OCR-слою.
 
@@ -118,12 +145,21 @@ docx_converter/
 ├── ocr_auto_mode.py        # оркестратор «OCR или нет»
 ├── ocr_converter.py        # обёртка OCRmyPDF через subprocess
 ├── pdf_core.py             # провайдеро-независимое ядро PDF → Markdown
+├── ocr/                    # тракт MinerU (OCR CLI для агента)
+│   ├── __init__.py         # общие типы: Finding, SEVERITIES
+│   ├── mineru_provider.py  # облачный MinerU API v4 + result_from_zip
+│   ├── cache.py            # кэш сырого ответа (zip + meta.json)
+│   ├── postprocess.py      # детерминированная чистка markdown после OCR
+│   ├── validate.py         # проверки, report.json, пометки «!! ПРОВЕРИТЬ: … !!»
+│   ├── diff.py             # сверка прогонов vlm/pipeline
+│   └── cli.py              # python -m ocr.cli
 ├── requirements.txt
 ├── conftest.py             # пустой, нужен pytest для корневого rootdir
 ├── tests/
 │   ├── test_convert.py         # регрессионные тесты convert.py
 │   ├── test_markdown_cleanup.py
 │   ├── test_ocr_auto_mode.py
+│   ├── test_ocr_cli.py         # приёмочные тесты python -m ocr.cli
 │   └── test_pdf_core.py
 ├── test_formatting.md      # md-фикстура для test_convert.py (полный прогон форматирования)
 ├── test_formatting_bom.md  # md-фикстура: файл с BOM в начале

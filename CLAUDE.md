@@ -58,7 +58,7 @@ Push to `main` → Streamlit Cloud picks it up automatically. No CI step require
 
 ## Architecture
 
-Seven Python modules:
+Seven Python modules plus the `ocr/` package:
 
 - **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types.
 - **`convert.py`** — Core Markdown → DOCX engine (1316 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
@@ -67,6 +67,13 @@ Seven Python modules:
 - **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
 - **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Both runs are bounded: `OCR_TIMEOUT_SEC = 300` for ocrmypdf, `DEPENDENCY_TIMEOUT_SEC = 15` for `--version` probes. `TimeoutExpired` surfaces as a readable message, never a traceback (no manual `kill()` — `subprocess.run` already kills the child before raising). Also provides `check_ocr_dependencies`, which locates Ghostscript via `shutil.which` over platform candidates (`gswin64c` / `gswin32c` on Windows, `gs` elsewhere) — never a hardcoded name.
 - **`pdf_core.py`** — Provider-agnostic PDF → Markdown core. Public entry points: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider) -> str` and `pdf_to_markdown_with_status(...) -> (str, status_dict | None)` (the latter is what `app.py` uses — the UI shows `ocr_status`). Owns bytes→tempfile plumbing; no Streamlit, no caches. Defines the `OcrProvider` protocol (`ocr_pdf_to_markdown(pdf_bytes, page_range) -> str`) with one implementation, `OcrmypdfProvider`; `provider=None` routes through `ocr_auto_mode.convert_pdf_with_optional_ocr` unchanged. A second (cloud vision) provider is a planned separate PR.
+- **`ocr/`** — MinerU OCR pipeline (`ocr/__init__.py` holds the shared `Finding` dataclass and `SEVERITIES`). Six modules:
+  - **`ocr/mineru_provider.py`** (#61) — MinerU cloud API v4 behind the `pdf_core.OcrProvider` protocol: PDF → raw zip → `OcrResult`. `result_from_zip` unpacks a zip without touching the network — that is what the cache reuses.
+  - **`ocr/cache.py`** (#62) — raw provider response cache (zip + `meta.json`): `cache_key`, `build_meta`, `LocalCache`, `make_cache`. `make_cache("drive")` raises `NotImplementedError` until stage 8.
+  - **`ocr/postprocess.py`** (#63) — deterministic Markdown cleanup after OCR: HTML tables → pipe tables, page-split tables merged, homoglyphs, `No` → `№`; everything doubtful becomes a `Finding`, nothing is silently fixed.
+  - **`ocr/validate.py`** (#64) — checks over the postprocessed Markdown (ИНН/ОГРН/КПП, ГОСТ, units, table totals) plus `build_report` (`report.json` schema v1), `annotate` and `strip_annotations`.
+  - **`ocr/diff.py`** (#65) — word-level comparison of two runs (`vlm` vs `pipeline`); every divergence becomes a `low_confidence` finding. Text is never changed, no side is declared right.
+  - **`ocr/cli.py`** (#66) — `python -m ocr.cli`: `run_pipeline` wires the whole tract (cache → provider → postprocess → validate → optional diff → report), `main` writes `out.md` / `report.json` and prints one JSON line. Stage 8's UI calls `run_pipeline` unchanged.
 
 OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
 
@@ -140,13 +147,39 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше). Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
 The P0 audit findings were fixed in the #28–#33 cycle (CRLF normalization; #26 vs requisites/stage blocks; callout spacer; numbered-list detection and restart; `![alt](src)` garbage hyperlinks; table cell split/padding). Rerun `pytest -v` after touching block dispatch, lists, tables, or the inline parser.
 
 Documented long-standing limits: column alignment from `:----` separators is not implemented; list markers are capped at 2 digits (`^\d{1,2}\. `) so years like «2025.» are not eaten as list items; pseudo-headings without applied Word styles (mammoth cannot detect them); double-digit page numbers render vertically in LibreOffice.
+
+## OCR CLI (инструмент для агента)
+
+**Назначение:** тендерный PDF (в т.ч. скан) → Markdown со структурой + отчёт о сомнительных местах.
+Смысл исходника не меняется: чинятся только известные артефакты OCR, остальное помечается.
+
+**Вызов (из корня репозитория):**
+`python -m ocr.cli ВХОД.pdf --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--cache local|drive]`
+
+**Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
+Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
+
+**Выход:** `ПАПКА/out.md`, `ПАПКА/report.json`, в stdout — одна строка JSON:
+`{"status","out_md","report","cache_hit","findings":{"critical","warning","info"},"error"}`.
+
+**Коды выхода:** `0` — критичных находок нет; `2` — есть критичные находки, `out.md` написан,
+читать `report.json`; `1` — тракт не отработал, читать `error`.
+
+**Флаги:** `--verify` — второй прогон другим движком MinerU, расхождения → находки `low_confidence`
+(дольше, вдвое больше квоты). `--annotate` — находки вставлены в `out.md` как `!! ПРОВЕРИТЬ: … !!`;
+перед конвертацией в DOCX снять через `ocr.validate.strip_annotations`.
+`--cache drive` пока не реализован.
+
+**report.json:** `findings[]` = `{id, rule, severity, page, snippet, suggestion}`.
+`snippet` — дословный фрагмент `out.md`; `suggestion` — что предлагает тракт или что увидел второй прогон;
+`page` — страница PDF или `null`.
 
 ## Constraints
 
