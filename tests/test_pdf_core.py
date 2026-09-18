@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import subprocess
 import sys
@@ -5,13 +6,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 from file_converter import analyze_pdf_pages, convert_with_markitdown
 from ocr_auto_mode import convert_pdf_with_optional_ocr
-from pdf_core import OcrmypdfProvider, pdf_to_markdown, pdf_to_markdown_with_status
+from ocr_fixtures import read_fixture, require_fixture
+from pdf_core import (
+    OcrmypdfProvider,
+    OcrResult,
+    PageInfo,
+    pdf_to_markdown,
+    pdf_to_markdown_with_status,
+)
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 TEXT_PDF = REPO_DIR / "test_files" / "sample.pdf"
 SCAN_PDF = REPO_DIR / "test_files" / "ocr_sample.pdf"
+
+
+# ПРАВКА #60: провайдер возвращает OcrResult, а не строку.
+def _fake_result(markdown="provider markdown"):
+    return OcrResult(markdown=markdown, content_list=None, pages=[],
+                     provider="fake", model_version=None, raw_dir=None)
 
 
 def _write_temp_pdf(pdf_bytes: bytes) -> str:
@@ -82,9 +98,9 @@ class PdfCoreProviderTests(unittest.TestCase):
         calls = []
 
         class FakeProvider:
-            def ocr_pdf_to_markdown(self, pdf_bytes, page_range=None):
+            def ocr_pdf(self, pdf_bytes, page_range=None):
                 calls.append((pdf_bytes, page_range))
-                return "provider markdown"
+                return _fake_result()
 
         pdf_bytes = SCAN_PDF.read_bytes()
         markdown, status = pdf_to_markdown_with_status(
@@ -98,7 +114,7 @@ class PdfCoreProviderTests(unittest.TestCase):
 
     def test_explicit_provider_skipped_when_text_layer_present(self):
         class FailingProvider:
-            def ocr_pdf_to_markdown(self, pdf_bytes, page_range=None):
+            def ocr_pdf(self, pdf_bytes, page_range=None):
                 raise AssertionError("provider must not be called")
 
         markdown, status = pdf_to_markdown_with_status(
@@ -121,15 +137,64 @@ class PdfCoreProviderTests(unittest.TestCase):
             seen["page_range"] = page_range
             return "ocr markdown"
 
-        provider = OcrmypdfProvider(ocr_func=ocr_func, convert_func=convert_func)
-        markdown = provider.ocr_pdf_to_markdown(b"%PDF fake scan", page_range="3")
+        provider = OcrmypdfProvider(
+            ocr_func=ocr_func, convert_func=convert_func,
+            analyze_func=lambda path: [{"page_number": 1, "has_text_layer": False}])
+        result = provider.ocr_pdf(b"%PDF fake scan", page_range="3")
 
-        self.assertEqual(markdown, "ocr markdown")
+        self.assertIsInstance(result, OcrResult)
+        self.assertEqual(result.markdown, "ocr markdown")
+        self.assertEqual((result.provider, result.model_version), ("ocrmypdf", None))
+        self.assertIsNone(result.content_list)
+        self.assertIsNone(result.raw_dir)
         self.assertEqual(seen["src_bytes"], b"%PDF fake scan")
         self.assertEqual(seen["page_range"], "3")
         self.assertNotEqual(seen["src_path"], seen["converted_path"])
         self.assertFalse(os.path.exists(seen["src_path"]))
         self.assertFalse(os.path.exists(seen["converted_path"]))
+
+
+# ПРАВКА #60: контракт датаклассов и сведения о страницах от OcrmypdfProvider.
+def test_ocr_result_and_page_info_are_frozen_with_fixed_fields():
+    result = _fake_result()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.markdown = "x"
+    assert [f.name for f in dataclasses.fields(OcrResult)] == [
+        "markdown", "content_list", "pages", "provider", "model_version", "raw_dir"]
+    assert [f.name for f in dataclasses.fields(PageInfo)] == [
+        "number", "has_text_layer", "ocr_applied", "warnings"]
+
+
+def test_ocrmypdf_provider_reports_pages_from_real_analyze():
+    pdf = require_fixture("bakeoff.pdf").read_bytes()
+    vlm = read_fixture("vlm.md")
+
+    def ocr_func(src, dst):
+        Path(dst).write_bytes(b"%PDF searchable")
+
+    def convert_func(path, page_range=None):
+        return vlm
+
+    result = OcrmypdfProvider(ocr_func=ocr_func, convert_func=convert_func).ocr_pdf(pdf)
+    assert result.markdown == vlm
+    assert [p.number for p in result.pages] == list(range(1, 10))
+    assert all(not p.has_text_layer and p.ocr_applied for p in result.pages)
+    assert all(p.warnings == () for p in result.pages)
+
+    ranged = OcrmypdfProvider(
+        ocr_func=ocr_func, convert_func=convert_func).ocr_pdf(pdf, "2-3")
+    assert [p.number for p in ranged.pages] == [2, 3]
+
+
+def test_status_dict_unchanged_for_ui():
+    class FakeProvider:
+        def ocr_pdf(self, pdf_bytes, page_range=None):
+            return _fake_result()
+
+    md, status = pdf_to_markdown_with_status(SCAN_PDF.read_bytes(), page_range="1-2",
+                                             provider=FakeProvider())
+    assert md == "provider markdown"
+    assert set(status) == {"mode", "status", "message", "pages_without_text_layer"}
 
 
 if __name__ == "__main__":
