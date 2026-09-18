@@ -10,10 +10,12 @@ import re
 from ocr_fixtures import count_diffs, read_fixture, require_fixture, text_tokens
 
 # Фактическое значение, снятое исполнителем спеки 00; расчётное в спеке — 14.
-# Разница объяснена в docs/docx_converter_docs_sync.md, раздел «Метрика vlm→golden».
-VLM_TO_GOLDEN_DIFFS = 12
+# ПРАВКА #68: было 12, стало 76 — правка 8 («;-» → «; -») разводит 66 склеек на
+# два токена. 64 из них дают свой опкод, две попали внутрь соседних («°C;-» и
+# «РоЕ;-»). Разбор — в docs/docx_converter_docs_sync.md, «Метрика vlm→golden».
+VLM_TO_GOLDEN_DIFFS = 76
 # golden.md вне git — sha ловит тихую подмену эталона.
-GOLDEN_SHA256 = "dc3f377c0d54210a9bacbc8369aa19ee866c13cd7e094f2a94f3963f16bbd887"
+GOLDEN_SHA256 = "fb82493f8eb9b6de21d5f77e8cfff7199a260eccfb7a465b183bb02afd78c87b"
 
 
 def test_metric_and_golden_unchanged():
@@ -63,6 +65,16 @@ def test_fix_7_single_pipe_table():
     assert "первичная поверка весов" in row25                   # хвост со стр. 6
     assert "ITV Интеллект - УРММ" in row25                      # хвост со стр. 7
     assert any(r.startswith("| I. Общие данные |") for r in rows)
+
+
+def test_fix_8_list_glue():
+    """ПРАВКА #68: правка 8 — «;»/«:» вплотную к маркеру списка разводятся пробелом."""
+    vlm, golden = read_fixture("vlm.md"), read_fixture("golden.md")
+    assert len(re.findall(r"[;:]-", vlm)) == 66                # склеек в исходнике
+    assert not re.search(r"[;:]-", golden)                     # в эталоне ни одной
+    # 5 своих у vlm + 66 разведённых правкой 8 + 2 стыка, где правка 7 дописала
+    # продолжение таблицы через пробел к ячейке, кончавшейся на «;»
+    assert len(re.findall(r"[;:] -", golden)) == len(re.findall(r"[;:] -", vlm)) + 66 + 2
 
 
 def test_text_tokens_strips_markup():

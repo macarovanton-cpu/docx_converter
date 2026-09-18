@@ -1,6 +1,6 @@
 # 04 — Детерминированный постпроцессор
 
-**# ПРАВКА #63.** Зависит от: 00. Независима от 01–03. Сеть и кэш не нужны.
+**# ПРАВКА #63** (+ #68, #69). Зависит от: 00. Независима от 01–03. Сеть и кэш не нужны.
 
 ## Цель
 
@@ -45,6 +45,7 @@ def html_tables_to_pipe(md: str) -> tuple[str, list[Finding]]: ...
 def merge_split_tables(md: str) -> tuple[str, list[Finding]]: ...
 def fix_numero(md: str) -> str: ...
 def fix_degree(md: str) -> str: ...
+def fix_list_glue(md: str) -> str: ...        # ПРАВКА #68
 def fix_mixed_alphabet(md: str) -> tuple[str, list[Finding]]: ...
 def flag_translit(md: str) -> list[Finding]: ...
 def flag_signature_block(md: str) -> list[Finding]: ...
@@ -119,7 +120,15 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 вокруг: слева ровно один, между `°C` и следующим знаком `; . , )` — ни одного.
 `+50  $C^{\circ}$ ;` → `+50 °C;`. Другие формулы `$…$` не трогать.
 
-### 5. `fix_mixed_alphabet`
+### 5. `fix_list_glue` (ПРАВКА #68)
+
+`;-` и `:-` → `; -` и `: -`: OCR прилепляет маркер перечисления к концу
+предыдущей фразы (`Разграничить права пользователей на:- администратор`).
+Только эти два сочетания, ничего шире: `+-30кг` в допусках и `--` не трогаются,
+разделитель pipe-таблицы `|:---|` остаётся собой. То же правило — правка 8
+сборки `golden.md` (спека 00), поэтому в остаток метрики склейки не попадают.
+
+### 6. `fix_mixed_alphabet`
 
 Токен — максимальная последовательность букв и цифр (дефис делит токены).
 
@@ -132,7 +141,7 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 
 Цифры алфавитом не считаются: `12В`, `2шт`, `Ст3` — не смешанные.
 
-### 6. `flag_translit` — только пометка
+### 7. `flag_translit` — только пометка
 
 Строка вида «инициалы + фамилия»:
 `^\s*[A-Za-zА-ЯЁ]\.\s?[A-Za-zА-ЯЁ]{1,3}\.\s+[A-Za-zА-Яа-яЁё-]+\s*$`,
@@ -142,17 +151,17 @@ def postprocess(md: str) -> tuple[str, list[Finding]]: ...
 узкий — только ФИО с инициалами; общий поиск транслита по тексту без словаря
 даёт шум на `Ethernet`, `Windows`, `Parsec`.
 
-### 7. `flag_signature_block` — только пометка
+### 8. `flag_signature_block` — только пометка
 
 Три и более **подряд идущих абзаца** (блоки через пустую строку), каждый из
-которых — «инициалы + фамилия» по шаблону из п. 6 (в любом алфавите) → одна
+которых — «инициалы + фамилия» по шаблону из п. 7 (в любом алфавите) → одна
 находка `signature_block` на серию. `snippet` — первый абзац серии;
 `suggestion` — `"Должности и ФИО идут отдельными списками — сопоставить по скану"`.
 
-### 8. `postprocess`
+### 9. `postprocess`
 
-Порядок: 1 → 2 → 3 → 4 → 5 → 6 → 7 → `cleanup_ocr_markdown`. Находки — в порядке
-получения. `cleanup_ocr_markdown` вызывается последним и как есть.
+Порядок: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → `cleanup_ocr_markdown`. Находки — в
+порядке получения. `cleanup_ocr_markdown` вызывается последним и как есть.
 
 ## Приёмочные тесты (`tests/test_ocr_postprocess.py`)
 
@@ -163,7 +172,7 @@ rules = [f.rule for f in findings]
 
 # метрика: не хуже эталонной и детерминированное ушло
 assert count_diffs(out, golden) <= VLM_TO_GOLDEN_DIFFS          # из tests/test_ocr_fixtures.py
-assert count_diffs(out, golden) <= 7     # остаток: сыручими, IR-, 5 подписей; пересчитать, если в 00 вышло не 14
+assert count_diffs(out, golden) <= 5     # остаток: сыручими, IR-, 3 опкода на 5 подписях
 assert postprocess(out)[0] == out                               # идемпотентность
 
 # починено
@@ -239,6 +248,11 @@ wide = a + "\n\n|  | хвост |\n|---|---|\n| 2 | x | лишняя |"
 md, f = merge_split_tables(wide)
 assert md == wide and [x.rule for x in f] == ["table_merge_failed"]
 assert merge_split_tables(a + "\n\nАбзац.\n\n|  | конец |\n|---|---|")[1] == []   # между ними текст
+
+# fix_list_glue
+assert fix_list_glue("на:- один;- два") == "на: - один; - два"
+assert fix_list_glue("+-30кг, 60 т. +- 50кг") == "+-30кг, 60 т. +- 50кг"
+assert fix_list_glue("|:---|---:|") == "|:---|---:|"
 
 # fix_numero / fix_degree
 assert fix_numero("No1, No 12, No.7, Noп/п") == "№ 1, № 12, № 7, № п/п"

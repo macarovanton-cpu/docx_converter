@@ -6,16 +6,18 @@
 
 from ocr import SEVERITIES
 from ocr_fixtures import count_diffs, read_fixture, text_tokens
-from ocr.postprocess import (fix_degree, fix_mixed_alphabet, fix_numero,
-                             flag_signature_block, flag_translit,
+from ocr.postprocess import (fix_degree, fix_list_glue, fix_mixed_alphabet,
+                             fix_numero, flag_signature_block, flag_translit,
                              html_tables_to_pipe, merge_split_tables,
                              parse_pipe_tables, postprocess)
 from test_ocr_fixtures import VLM_TO_GOLDEN_DIFFS
 
 # Фактический остаток на vlm.md: 5 опкодов — «сыручими», «IR-камерами» и три
-# опкода на пяти подписях. Спека считала 7 из расчётных 14 в спеке 00;
-# в 00 вышло 12, порог оставлен как в спеке — он с запасом.
-REMAINING_DIFFS = 7
+# опкода на пяти подписях. Спека считала 7 из расчётных 14 в спеке 00.
+# ПРАВКА #68: порог опущен с 7 до факта — запас в две единицы пропускал бы
+# регрессию на один опкод. Склейки списка (правка 8) в остаток не попадают:
+# fix_list_glue чинит их в тракте ровно так же, как они починены в эталоне.
+REMAINING_DIFFS = 5
 
 
 def run_vlm():
@@ -120,6 +122,14 @@ def test_merge_split_tables():
     assert md == wide and [x.rule for x in f] == ["table_merge_failed"]
 
     assert merge_split_tables(a + "\n\nАбзац.\n\n|  | конец |\n|---|---|")[1] == []
+
+
+def test_fix_list_glue():
+    """ПРАВКА #68: только «;-» и «:-»; «+-», «--» и разделитель «:---» не трогаем."""
+    assert fix_list_glue("на:- один;- два") == "на: - один; - два"
+    assert fix_list_glue("+-30кг, 60 т. +- 50кг") == "+-30кг, 60 т. +- 50кг"
+    assert fix_list_glue("|:---|---:|") == "|:---|---:|"
+    assert fix_list_glue(fix_list_glue("на:-")) == fix_list_glue("на:-")
 
 
 def test_fix_numero_and_degree():

@@ -42,6 +42,8 @@ _NUMERO_RE = re.compile(r"\bNo\.?[ \t]*(?=\d|п/п)")
 _DEGREE_RE = re.compile(
     r"[ \t]*\$\s*(?:C\s*\^\s*\{\s*\\circ\s*\}|\^\s*\{\s*\\circ\s*\}\s*C)\s*\$")
 _DEGREE_TAIL_RE = re.compile(r"°C[ \t]+(?=[;.,)])")
+# ПРАВКА #68: «;» или «:» вплотную к маркеру списка; «:---» — разделитель таблицы
+_LIST_GLUE_RE = re.compile(r"(?<=[;:])-(?!-)")
 _TABLE_TAG_RE = re.compile(r"</?table\b[^>]*>", re.I)
 _CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 _SEP_CELL_RE = re.compile(r":?-+:?")
@@ -363,7 +365,7 @@ def merge_split_tables(md: str) -> tuple[str, list[Finding]]:
     return "\n".join(line for _, block in out for line in block), findings
 
 
-# --- 3-5. точечные замены ---------------------------------------------------
+# --- 3-6. точечные замены ---------------------------------------------------
 
 def fix_numero(md: str) -> str:
     """No / No. перед цифрой или п/п → «№ »; Nokia, Note, ПNo1 не трогаем."""
@@ -373,6 +375,11 @@ def fix_numero(md: str) -> str:
 def fix_degree(md: str) -> str:
     r"""$C^{\circ}$ и $^{\circ}C$ → °C; прочие формулы не трогаем."""
     return _DEGREE_TAIL_RE.sub("°C", _DEGREE_RE.sub(" °C", md))
+
+
+def fix_list_glue(md: str) -> str:
+    """ПРАВКА #68: «на:-» → «на: -». Только «;-» и «:-», разделитель «:---» не трогаем."""
+    return _LIST_GLUE_RE.sub(" -", md)
 
 
 def _canonical(folded: str | None, allow_ip_code: bool) -> str | None:
@@ -411,7 +418,7 @@ def fix_mixed_alphabet(md: str) -> tuple[str, list[Finding]]:
     return _TOKEN_RE.sub(replace, md), findings
 
 
-# --- 6-7. только пометки ----------------------------------------------------
+# --- 7-8. только пометки ----------------------------------------------------
 
 def flag_translit(md: str) -> list[Finding]:
     """Строка «инициалы + фамилия» с латиницей — пометить, текст не менять."""
@@ -440,10 +447,10 @@ def flag_signature_block(md: str) -> list[Finding]:
     return findings
 
 
-# --- 8. цепочка -------------------------------------------------------------
+# --- 9. цепочка -------------------------------------------------------------
 
 def postprocess(md: str) -> tuple[str, list[Finding]]:
-    """1 → 2 → 3 → 4 → 5 → 6 → 7 → cleanup_ocr_markdown. Находки — в порядке получения."""
+    """1 → 2 → … → 8 → cleanup_ocr_markdown. Находки — в порядке получения."""
     findings: list[Finding] = []
     md, found = html_tables_to_pipe(md)
     findings += found
@@ -451,6 +458,7 @@ def postprocess(md: str) -> tuple[str, list[Finding]]:
     findings += found
     md = fix_numero(md)
     md = fix_degree(md)
+    md = fix_list_glue(md)                       # ПРАВКА #68
     md, found = fix_mixed_alphabet(md)
     findings += found
     findings += flag_translit(md)
