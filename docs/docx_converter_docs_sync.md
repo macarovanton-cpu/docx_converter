@@ -341,3 +341,19 @@ template_path=None)` → открыто `python-docx`.
 
 Запись кэша — `{sha}-mineru-vlm-pall-v1` (`.zip` + `.meta.json`). В каждом zip есть
 `full.md` и ровно один `*content_list.json`. Дальше тракт этапа A работает оффлайн.
+
+### ПРАВКА #81
+
+`ocr/ingest.py` — единый вход `ingest(data, source_name=…, work_dir=…, …)` для `.pdf` / `.docx` / `.xlsx`.
+`detect_route`: `scan` (хотя бы одна страница без слоя, в т.ч. смешанный PDF), `text_tables`
+(слой везде + `pdf_has_tables` на `pdfplumber.find_tables`, линии), `text`, `office`.
+`scan` и `text_tables` — один вызов `run_pipeline`; `text` и `office` — MarkItDown, затем тот же
+`postprocess` + `validate` + `build_report` (`provider="markitdown"`, `model_version=None`,
+`page=None`). `--verify` на маршрутах MarkItDown — `ValueError`. `ocr/cli.py`: `main` зовёт `ingest`,
+`run_pipeline` не тронут, `app.py` зовёт его как раньше.
+
+Правка приёмки 21.09.2026: `test_files/sample.pdf` — смешанный PDF (13-я из 13 страниц без слоя),
+детектор даёт `scan`; маршрут `text` в тестах закрыт синтетической вырезкой страниц 1–2
+`textpdf1.pdf` (`tests/test_ocr_ingest.py::two_page_text_pdf`), постоянной фикстуры на него нет.
+
+Следующий свободный номер — **#82** (закреплён за `ocr/board.py`, спека 09).

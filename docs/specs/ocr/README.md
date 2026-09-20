@@ -19,6 +19,7 @@
 | `05-validate.md` | `ocr/validate.py` | **#64** |
 | `06-diff.md` | `ocr/diff.py` | **#65** |
 | `07-cli.md` | `ocr/cli.py` | **#66** |
+| `09-ingest-board.md` | `ocr/ingest.py`, `ocr/board.py` | **#81**, **#82** |
 
 Номера закреплены заранее: 01 и 04 независимы и могут идти параллельно, без
 закрепления они бы столкнулись. Фактическая последняя правка в коде на момент
@@ -131,6 +132,9 @@ class Finding:
 | `pipeline.md` | выход MinerU `model_version=pipeline`, очень шумный |
 | `vlm.md` | выход MinerU `model_version=vlm` |
 | `golden.md` | эталон, собирается в спеке 00 |
+| `bakeoff2.pdf`, `bakeoff3.pdf` | сканы, 8 и 9 страниц; сырые выходы — `vlm_raw2.zip`, `vlm_raw3.zip` (спека 09) |
+| `textpdf1.pdf` | текстовый PDF с таблицами, 10 страниц; сырой выход — `vlm_raw_textpdf1.zip` (спека 09) |
+| `docx1.docx`, `xlsx1.xlsx` | офисные входы, родная конвертация MarkItDown, сырого zip нет (спека 09) |
 | `vlm_raw.zip` | сырой ответ MinerU (`vlm`) живого прогона: `full.md`, `content_list.json`, картинки. Пишется live-тестом спеки 02, используется тестами спек 04 (#69) и 05 |
 
 Записанных ответов API (HTTP) среди фикстур **нет** — см. PLACEHOLDER-ы. Сырой

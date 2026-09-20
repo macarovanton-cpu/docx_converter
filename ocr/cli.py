@@ -110,7 +110,7 @@ def _parse_args(argv: "list[str] | None") -> argparse.Namespace:
     parser = _Parser(
         prog="python -m ocr.cli",
         description="Тендерный PDF -> Markdown со структурой + отчёт о сомнительных местах.")
-    parser.add_argument("input", help="входной PDF")
+    parser.add_argument("input", help="входной PDF/DOCX/XLSX")     # ПРАВКА #81
     parser.add_argument("--out", required=True, help="папка для out.md и report.json")
     parser.add_argument("--engine", default="mineru", choices=ENGINES,
                         help="движок OCR (по умолчанию mineru)")
@@ -132,17 +132,21 @@ def main(argv: "list[str] | None" = None, *, provider_factory=None) -> int:
     summary = {"status": "error", "out_md": None, "report": None,
                "cache_hit": False, "findings": None, "error": None}
     try:
+        # ПРАВКА #81: вход .pdf/.docx/.xlsx идёт через ingest; импорт здесь —
+        # ocr.ingest сам импортирует run_pipeline из этого модуля
+        from ocr.ingest import ingest
+
         args = _parse_args(argv)
         source = Path(args.input)
-        pdf_bytes = source.read_bytes()
+        data = source.read_bytes()
         out_dir = Path(args.out).resolve()
         cache = make_cache(args.cache)
-        md, report = run_pipeline(pdf_bytes, source_name=source.name,
-                                  work_dir=out_dir, engine=args.engine,
-                                  mode=args.mode, verify=args.verify,
-                                  annotate=args.annotate,
-                                  annotate_all=args.annotate_all, cache=cache,
-                                  provider_factory=provider_factory)
+        md, report = ingest(data, source_name=source.name,
+                            work_dir=out_dir, engine=args.engine,
+                            mode=args.mode, verify=args.verify,
+                            annotate=args.annotate,
+                            annotate_all=args.annotate_all, cache=cache,
+                            provider_factory=provider_factory)
         # пишем только после успешного тракта: недописанный out.md хуже отсутствующего
         out_dir.mkdir(parents=True, exist_ok=True)
         out_md, report_path = out_dir / "out.md", out_dir / "report.json"
