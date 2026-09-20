@@ -1,0 +1,209 @@
+# 10 — Эталоны по фикстурам и `count_diffs` в табло
+
+**# ПРАВКА #83.** Зависит от: 09 и от заполненных человеком `<stem>.errors.txt`. Сеть не нужна вообще.
+
+## Цель
+
+Этап A, вторая половина. Из черновиков спеки 09 и ручных списков ошибок собрать
+эталон на каждую фикстуру, закрепить его sha256 и порог остатка в `tests/`, подключить
+`count_diffs` в табло. После этой спеки любая правка тракта видна числом по шести
+документам, а не по одному `bakeoff.pdf`.
+
+Ожидания по качеству (ориентир человека, не assert — см. PLACEHOLDER 4 спеки 09):
+сканы 8–8,5; текстовый PDF ~9; DOCX/XLSX 9,5+.
+
+## Шаг 0 — условия входа (иначе стоп)
+
+1. Спека 09 закоммичена, `pytest -q` зелёный, `python -X utf8 -m ocr.board` отрабатывает оффлайн.
+2. Существуют все пять файлов: `bakeoff2`, `bakeoff3`, `textpdf1`, `docx1`, `xlsx1` + `.errors.txt`
+   в `_test/fixtures/ocr/`. Пустой (только шапка и комментарии) — законное состояние: ошибок нет.
+3. Каждая содержательная строка разбирается как `страница | было | надо` (ровно три поля
+   после раскрытия `\|`), и `было` встречается в свежем черновике
+   `_test/board/<stem>/out.md` **ровно один раз**. `было` пусто, не найдено или найдено
+   дважды — стоп: полный список таких строк (файл, номер строки, сколько вхождений) —
+   человеку. Не угадывать место, не править `errors.txt` самому.
+4. Черновик пересобирается перед сборкой (`python -m ocr.board`): эталон строится от
+   сегодняшнего выхода тракта, не от того, что человек читал, если тракт с тех пор менялся.
+   Если пересобранный черновик отличается от вычитанного так, что пункт 3 перестал
+   выполняться, — стоп.
+
+## Трогать
+
+- `ocr/board.py` — `parse_errors`, `apply_errors`, флаг `--golden`, перенос `text_tokens`/`count_diffs`, заполнение `count_diffs`/`threshold` (#83)
+- `tests/ocr_fixtures.py` — `text_tokens` и `count_diffs` становятся реэкспортом из `ocr.board` (имена и поведение прежние)
+- `tests/test_ocr_golden.py` — создать
+- `tests/test_ocr_board.py` — `count_diffs is None` заменить на проверку фактов (см. ниже)
+- `_test/fixtures/ocr/<stem>.golden.md` — пять файлов (вне git)
+- `docs/docx_converter_docs_sync.md` — `### ПРАВКА #83` с таблицей эталонов; `docs/specs/ocr/README.md` — таблица спек и фикстур; `CLAUDE.md` — `--golden` в описании табло
+
+## Не трогать
+
+`_test/fixtures/ocr/golden.md`, `GOLDEN_SHA256` и `VLM_TO_GOLDEN_DIFFS` в
+`tests/test_ocr_fixtures.py` (эталон `bakeoff.pdf` собран спекой 00 и остаётся как есть),
+`<stem>.errors.txt` (файлы человека — только читать), `ocr/ingest.py`, `ocr/cli.py`,
+`ocr/postprocess.py`, `ocr/validate.py` (**тракт в этой спеке не чинится**: нашлась
+систематическая ошибка — это следующая правка со своей спекой, а не повод подогнать выход
+под эталон), `app.py`, `file_converter.py`, `requirements.txt`, всё из общего списка запретов.
+
+## Интерфейсы (дословно)
+
+### Перенос метрики
+
+`text_tokens` и `count_diffs` переезжают в `ocr/board.py` **дословно** (тело и докстринги
+из спеки 00): продуктовый модуль не может импортировать из `tests/`. В `tests/ocr_fixtures.py`
+остаётся `from ocr.board import count_diffs, text_tokens  # ПРАВКА #83` — все существующие
+импорты тестов работают без правок, `test_text_tokens_strips_markup` зелёный.
+
+### `ocr/board.py` (#83)
+
+```python
+GOLDEN = {"bakeoff.pdf": "golden.md", "bakeoff2.pdf": "bakeoff2.golden.md",
+          "bakeoff3.pdf": "bakeoff3.golden.md", "textpdf1.pdf": "textpdf1.golden.md",
+          "docx1.docx": "docx1.golden.md", "xlsx1.xlsx": "xlsx1.golden.md"}
+
+# остаток тракта до эталона по каждой фикстуре отдельно; факт ставит исполнитель
+THRESHOLDS = {"bakeoff.pdf": 6, "bakeoff2.pdf": <факт>, "bakeoff3.pdf": <факт>,
+              "textpdf1.pdf": <факт>, "docx1.docx": <факт>, "xlsx1.xlsx": <факт>}
+
+
+def text_tokens(md: str) -> list[str]: ...
+def count_diffs(a: str, b: str) -> int: ...
+
+
+def parse_errors(text: str) -> list[tuple[str, str, str]]: ...      # (страница, было, надо)
+
+
+def apply_errors(md: str, errors: list[tuple[str, str, str]]) -> str: ...
+```
+
+- `parse_errors`: строки с `#` и пустые пропускает; делит по `|`, не экранированной `\`;
+  поля — `strip()`, `\|` → `|`; не три поля или пустое `было` → `ValueError` с номером строки.
+- `apply_errors`: для каждой тройки по порядку — `md.count(было) != 1` →
+  `ValueError(f"«{было}»: вхождений {n}, нужно ровно 1")`; иначе одна замена. Правки
+  применяются последовательно к уже изменённому тексту: строка, ставшая неуникальной после
+  предыдущей правки, — тоже ошибка, не молчаливая замена первой.
+- `python -m ocr.board --golden [--force]`: для пяти фикстур без эталона пишет
+  `FIXTURES/<stem>.golden.md = apply_errors(черновик, parse_errors(errors.txt))`.
+  Существующий эталон без `--force` — ошибка (код 1) с именем файла; `golden.md` у
+  `bakeoff.pdf` не трогается никогда, даже с `--force`. Нет `errors.txt` — ошибка: пустой
+  список правок человек подтверждает файлом, а не его отсутствием.
+- `board_row`: есть файл эталона → `count_diffs = count_diffs(md, golden)`,
+  `threshold = THRESHOLDS[name]`; нет → оба `None` (как в спеке 09). Новый ключ строки
+  `per_1000_tokens = round(1000 * count_diffs / len(text_tokens(golden)), 1)` либо `None` —
+  ставится после `threshold`; консольная таблица получает колонки `diffs`, `thr`, `‰`.
+
+### Закрытый список правок
+
+Как в спеке 00: эталон = выход тракта + **закрытый список** правок, больше ничего.
+Здесь список — содержательные строки `<stem>.errors.txt`; расширяется он только новой
+строкой в этом файле (её пишет человек) + пересборка `--golden --force` + новые
+`GOLDEN_SHA256[stem]` и `THRESHOLDS[name]` в том же коммите. Руками в `*.golden.md`
+ничего не правится — иначе тест воспроизводимости ниже упадёт.
+
+DOCX/XLSX: в список попадают только потери и искажения (объединённые ячейки, нумерация,
+колонтитулы, потерянные строки). Стиль не правим. Ошибок нет → `errors.txt` пуст → эталон
+равен выходу конвертера, `count_diffs == 0`, эталон работает регрессионным якорем.
+
+`THRESHOLDS[name]` — фактическое `count_diffs(out, golden)` на день сборки, без запаса
+(запас в единицу пропускает регрессию на один опкод — урок спеки 04). Вход тракта —
+зафиксированный zip, выход детерминирован, поэтому сравнение `<=` с фактом честное.
+Верхняя граница для факта: число содержательных строк `errors.txt` × 3 (одна правка редко
+даёт больше трёх опкодов) — превышение исполнитель объясняет в docs_sync построчно.
+
+## Приёмочные тесты
+
+### `tests/test_ocr_golden.py`
+
+```python
+GOLDEN_SHA256 = {"bakeoff2": "<hex>", "bakeoff3": "<hex>", "textpdf1": "<hex>",
+                 "docx1": "<hex>", "xlsx1": "<hex>"}      # эталоны вне git — sha ловит тихую подмену
+
+board, outputs = build_board(tmp_path)                     # сеть заглушена, как в спеке 09
+
+for name, golden_name in GOLDEN.items():
+    golden = read_fixture(golden_name)
+    out = outputs[name][0]
+    assert count_diffs(golden, golden) == 0
+    assert count_diffs(out, golden) <= THRESHOLDS[name]
+
+for stem, sha in GOLDEN_SHA256.items():
+    path = require_fixture(f"{stem}.golden.md")
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+    # эталон воспроизводим из черновика и списка человека — руками его не правили
+    errors = parse_errors(read_fixture(f"{stem}.errors.txt"))
+    out = outputs[FIXTURE_BY_STEM[stem]][0]                # {"docx1": "docx1.docx", …} из BOARD
+    assert apply_errors(out, errors) == path.read_text(encoding="utf-8")
+    if not errors:
+        assert count_diffs(out, path.read_text(encoding="utf-8")) == 0      # якорь
+
+# пустой список — якорь
+assert apply_errors("текст", []) == "текст"
+
+# разбор и отказ от догадок
+assert parse_errors("# шапка\n\n3 | а \\| б | в\n") == [("3", "а | б", "в")]
+assert parse_errors("- | лишнее |\n") == [("-", "лишнее", "")]            # пустое «надо» = удалить
+with pytest.raises(ValueError, match="строка 1"):
+    parse_errors("3 | только два поля\n")
+with pytest.raises(ValueError, match="вхождений 2"):
+    apply_errors("аа аа", [("1", "аа", "б")])
+with pytest.raises(ValueError, match="вхождений 0"):
+    apply_errors("текст", [("1", "нет такого", "б")])
+
+# --golden не затирает ручной труд (пути подменены на tmp_path)
+assert main(["--golden"]) == 0
+assert main(["--golden"]) == 1                              # эталон уже есть
+assert main(["--golden", "--force"]) == 0
+assert (FIXTURES_TMP / "golden.md").read_bytes() == bakeoff_golden_before   # bakeoff неприкосновенен
+```
+
+### `tests/test_ocr_board.py` — замена проверки спеки 09
+
+```python
+for r in rows:
+    assert r["count_diffs"] is not None and r["count_diffs"] <= r["threshold"]
+    assert r["threshold"] == THRESHOLDS[r["fixture"]]
+    assert r["per_1000_tokens"] is not None
+assert next(r for r in rows if r["fixture"] == "bakeoff.pdf")["count_diffs"] <= 6   # остаток спеки 04
+```
+
+Отдельный тест: каталог фикстур без `*.golden.md` → `count_diffs`, `threshold`,
+`per_1000_tokens` — все `None`, табло строится (поведение спеки 09 сохранено).
+
+## Готово, когда
+
+- `pytest -v` зелёный целиком; `tests/test_ocr_fixtures.py` не менялся (метрика 99, sha `golden.md` прежний).
+- `python -X utf8 -m ocr.board`: шесть строк, у всех заполнены `diffs` / `thr` / `‰`;
+  `_test/quality_board.json` обновлён.
+- В docs_sync — `### ПРАВКА #83` с таблицей
+  «фикстура → маршрут → строк в errors.txt → `count_diffs` → на 1000 токенов → sha эталона (первые 12 знаков)»
+  и снимок «следующий свободный номер — #84».
+- `git status`: `_test/` и `.cache/` не показаны; `git diff --stat` не содержит `ocr/ingest.py`,
+  `ocr/cli.py`, `ocr/postprocess.py`, `ocr/validate.py`, `app.py`, `file_converter.py`.
+- В отчёте прогона — та же таблица и явный список фикстур с пустым `errors.txt` (якоря).
+
+## PLACEHOLDER-ы
+
+1. `<факт>` в `THRESHOLDS` и `<hex>` в `GOLDEN_SHA256` ставит исполнитель по результату сборки.
+2. Множитель `× 3` для верхней границы факта — стартовый, взят из опыта спеки 00
+   (правка подписей: 5 строк → 3 опкода; таблица — крупнее). Превышение — не стоп, а
+   обязательное объяснение в docs_sync.
+3. Эталон собран от выхода тракта, а не от оригинала: ошибку, которую человек не заметил
+   при вычитке, эталон закрепляет как норму. Это осознанное ограничение (как
+   `АТОМОБИЛЕЙ` в спеке 00); лечится новой строкой в `errors.txt`, не правкой эталона руками.
+4. `страница` в `errors.txt` сборкой не используется — она для человека и для будущей
+   привязки находок; формат поля не проверяется.
+
+## Коммит
+
+```
+ПРАВКА #83: эталоны по пяти фикстурам и count_diffs в табло
+
+ocr/board.py: parse_errors / apply_errors — эталон = черновик + закрытый список
+правок из <stem>.errors.txt, «было» обязано встречаться ровно один раз;
+--golden не перезаписывает существующий эталон без --force. text_tokens и
+count_diffs переехали сюда из tests/ocr_fixtures.py (там реэкспорт). Табло
+показывает count_diffs, порог и расхождения на 1000 токенов по всем шести
+фикстурам. tests/test_ocr_golden.py: sha256 каждого эталона, порог остатка по
+каждой фикстуре отдельно, воспроизводимость эталона из errors.txt.
+Эталоны лежат в _test/ (gitignored); golden.md бейкоффа не менялся.
+```
