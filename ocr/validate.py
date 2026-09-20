@@ -28,7 +28,10 @@ SEVERITY = {
     "table_total_mismatch": "critical",
     "table_row_cells": "warning",
     "table_empty_number": "warning",
+    "code_digits_glued": "warning",              # ПРАВКА #79
 }
+
+GLUED_CODE_SUGGESTION = "проверить границу с следующим пунктом"
 
 ANNOTATION_LIMIT = 200
 
@@ -43,9 +46,18 @@ _OGRN_RE = re.compile(r"ОГРН(?:ИП)?[^\d]{0,3}(\d+)")
 _KPP_RE = re.compile(r"КПП\W{0,3}(\w+)")
 _KPP_VALUE_RE = re.compile(r"\d{4}[\dA-Z]{2}\d{3}")
 _WORD_RE = re.compile(r"[^\W\d_]+")
-_GOST_TAIL_RE = re.compile(r"( Р)? \d+(\.\d+)*-\d{2,4}")
+# ПРАВКА #77: тире в обозначении бывает дефисом, en- и em-dash («ГОСТ Р 58760—2019»)
+_DASH = "[-–—]"
+_GOST_TAIL_RE = re.compile(rf"( Р)? \d+(\.\d+)*{_DASH}\d{{2,4}}")
+# ПРАВКА #77: «ГОСТ»/«ГОСТ Р» без номера — упоминание в прозе, а не обозначение.
+# Пробелы необязательны: «ГОСТ Р53228» и «ГОСТ8.726» — номер, только слипшийся.
+_GOST_NUMBER_RE = re.compile(r"( ?Р)? ?\d")
 _TU_RE = re.compile(r"(?<![^\W\d_])ТУ(?= ?\d)")
-_TU_TAIL_RE = re.compile(r" ?\d+(\.\d+)*-\d+-\d+-\d{2,4}")
+_TU_TAIL_RE = re.compile(rf" ?\d+(\.\d+)*{_DASH}\d+{_DASH}\d+{_DASH}\d{{2,4}}")
+# ПРАВКА #79: обозначение стандарта с номером; последняя числовая группа длиннее
+# четырёх цифр — к году прилип номер следующего пункта («СП 76.13330.20163»)
+_GLUED_CODE_RE = re.compile(
+    rf"(?<![^\W\d_])(?:СП|СНиП|ГОСТ(?: Р)?|ТУ) ?\d+(?:(?:\.|{_DASH})\d+)*")
 _UNIT_RE = re.compile(r"\d ?([^\W\d_]{1,3})(?![^\W\d_])")
 _NUMBER_CELL_RE = re.compile(r"\d+(\.\d+)*\.?")
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -114,7 +126,11 @@ def _snippet_from(md: str, start: int, end: int) -> str:
 
 
 def check_standards(md: str) -> list[Finding]:
-    """«ГОСТ» гомоглифами/регистром и номер не по шаблону; ТУ — только перед цифрой."""
+    """«ГОСТ» гомоглифами/регистром и номер не по шаблону; ТУ — только перед цифрой.
+
+    ПРАВКА #77: номер проверяется только там, где он есть. «ссылки на ГОСТ, ТУ»
+    и «сертификат (ГОСТ Р)» — проза, а не обозначение с потерянным номером.
+    """
     findings = []
     for match in _WORD_RE.finditer(md):
         token = match.group()
@@ -123,13 +139,32 @@ def check_standards(md: str) -> list[Finding]:
             continue
         if token != "ГОСТ":
             findings.append(_finding("gost_format", token, "ГОСТ"))
-        if not _GOST_TAIL_RE.match(md, match.end()):
+        if (_GOST_NUMBER_RE.match(md, match.end())
+                and not _GOST_TAIL_RE.match(md, match.end())):
             findings.append(_finding(
                 "gost_format", _snippet_from(md, match.start(), match.end())))
     for match in _TU_RE.finditer(md):
         if not _TU_TAIL_RE.match(md, match.end()):
             findings.append(_finding(
                 "gost_format", _snippet_from(md, match.start(), match.end())))
+    return findings
+
+
+def check_glued_codes(md: str) -> list[Finding]:
+    """ПРАВКА #79: к номеру стандарта прилип номер следующего пункта.
+
+    Последняя группа составного номера — год, он не длиннее четырёх цифр.
+    Длиннее — значит, OCR склеил обозначение со следующим пунктом списка:
+    «СП 76.13330.20163. Подрядчик…» — это «СП 76.13330.2016» и пункт «3.».
+    Номер из одной группы («ГОСТ Р53228») не год и под правило не попадает.
+    Текст не правим: где именно граница, видно только по скану.
+    """
+    findings = []
+    for match in _GLUED_CODE_RE.finditer(md):
+        groups = re.findall(r"\d+", match.group())
+        if len(groups) > 1 and len(groups[-1]) > 4:
+            findings.append(_finding("code_digits_glued", match.group(),
+                                     GLUED_CODE_SUGGESTION))
     return findings
 
 
@@ -236,8 +271,8 @@ def check_tables(md: str) -> list[Finding]:
 
 def validate(md: str, content_list: list | None = None) -> list[Finding]:
     """Все правила спеки 05 над постобработанным markdown."""
-    findings = (check_requisites(md) + check_standards(md) + check_units(md)
-                + check_scale_models(md) + check_tables(md))
+    findings = (check_requisites(md) + check_standards(md) + check_glued_codes(md)
+                + check_units(md) + check_scale_models(md) + check_tables(md))
     if content_list is None:
         return findings
     return [replace(f, page=page_of(f.snippet, content_list)) for f in findings]

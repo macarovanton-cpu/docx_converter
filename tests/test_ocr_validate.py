@@ -7,7 +7,7 @@
 import json
 import zipfile
 
-from ocr_fixtures import read_fixture, require_fixture
+from ocr_fixtures import read_fixture, read_raw, require_fixture
 from ocr.postprocess import html_tables_to_pipe, parse_pipe_tables, postprocess
 from ocr.validate import (ANNOTATION_PREFIX, LOST_HEADING, annotate, build_report,
                           page_of, strip_annotations, validate)
@@ -177,6 +177,51 @@ def test_rule_gost():
     assert rules("ГОСТ Р 53228-2008, ГОСТ 8.726-2010") == []
     assert rules("ГОСт 380-2005") == ["gost_format"] and rules("ГОСТ 380") == ["gost_format"]
     assert rules("(ТУ) на подключение") == [] and rules("ТУ 4274-001-12345678-2015") == []
+
+
+def test_rule_gost_prose_and_dashes():
+    """ПРАВКА #77: упоминание без номера — не находка; тире бывает трёх видов."""
+    for prose in ("ссылки на ГОСТ, ТУ), подписью", "сертификат (ГОСТ Р), а также",
+                  "по ГОСТ, рабочей документации", "требования ГОСТ."):
+        assert rules(prose) == []
+    for dash in ("-", "–", "—"):
+        assert rules(f"ГОСТ Р 58760{dash}2019") == []
+        assert rules(f"ТУ 4274-001-12345678{dash}2015".replace("-", dash)) == []
+    # номер есть, но не по шаблону — находка осталась
+    assert rules("ГОСТ Р53228") == ["gost_format"]
+    # гомоглиф ловится и в прозе: это про написание слова, не про номер
+    assert rules("по ГОСт, без номера") == ["gost_format"]
+
+
+def test_gost_quiet_on_both_fixtures():
+    """ПРАВКА #77: на обеих фикстурах gost_format молчит."""
+    for name in ("vlm_raw.zip", "vlm_raw2.zip"):
+        markdown, content_list = read_raw(name)
+        md, _ = postprocess(markdown, content_list)
+        assert [f.rule for f in validate(md)].count("gost_format") == 0, name
+    # в bakeoff2 обозначение с em-dash и упоминания в прозе — всё это было находками
+    md = postprocess(*read_raw("vlm_raw2.zip"))[0]
+    assert "ГОСТ Р 58760—2019" in md and "ГОСТ, ТУ)" in md and "(ГОСТ Р)" in md
+
+
+def test_rule_code_digits_glued():
+    """ПРАВКА #79: к году обозначения прилип номер следующего пункта."""
+    assert rules("по СП 76.13330.20163. Подрядчик") == ["code_digits_glued"]
+    for clean in ("СП 131.13330.2020", "СП 20.13330.2016", "ГОСТ Р 58760—2019",
+                  "ГОСТ 8.726-2010", "ТУ 4274-001-12345678-2015", "СНиП 3.05.06-85",
+                  "ГОСТ Р 53228", "СП 13330"):     # одна группа — номер, не год
+        assert "code_digits_glued" not in rules(clean), clean
+    found = validate("по СП 76.13330.20163. Подрядчик")[0]
+    assert found.snippet == "СП 76.13330.20163" and found.severity == "warning"
+    assert found.suggestion == "проверить границу с следующим пунктом"
+
+
+def test_code_digits_glued_on_fixtures():
+    """ПРАВКА #79: на bakeoff2 ровно одна находка, на bakeoff — ни одной."""
+    for name, expected in (("vlm_raw2.zip", ["СП 76.13330.20163"]), ("vlm_raw.zip", [])):
+        md = postprocess(*read_raw(name))[0]
+        assert [f.snippet for f in validate(md)
+                if f.rule == "code_digits_glued"] == expected, name
 
 
 def test_rule_units_and_models():
