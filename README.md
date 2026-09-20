@@ -84,6 +84,12 @@ OCR-режим `auto` (OCRmyPDF) реализован, но `ocrmypdf` **не** 
 в MarkItDown (без сети и ключа; `--verify` там — ошибка). Любой маршрут проходит `postprocess` + `validate`
 и даёт тот же `report.json`.
 
+**Табло качества (ПРАВКА #82):** `python -X utf8 -m ocr.board` — строго оффлайн, шесть фикстур из
+`_test/fixtures/ocr/` (PDF — из `vlm_raw*.zip` через временный кэш, промах — ошибка, не облако).
+Пишет `_test/quality_board.json`, черновики `_test/board/<имя>/out.md` + `report.json` и заготовки
+`_test/fixtures/ocr/<имя>.errors.txt` (существующие не перезаписывает — в них ручной труд).
+Код `0` — табло построено, `1` — исключение; критичные находки кода не меняют.
+
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
 Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
 
@@ -115,7 +121,7 @@ OCR-режим `auto` (OCRmyPDF) реализован, но `ocrmypdf` **не** 
 - **`ocr_auto_mode.py`** — оркестратор «OCR или нет» (`convert_pdf_with_optional_ocr`): по диагностике страниц решает, гнать ли PDF через OCR, с учётом выбранного диапазона страниц.
 - **`ocr_converter.py`** — обёртка OCRmyPDF через `subprocess` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`).
 - **`pdf_core.py`** — провайдеро-независимое ядро PDF → Markdown. Публичные функции: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider)` и `pdf_to_markdown_with_status(...)` (последнюю использует `app.py` — UI показывает `ocr_status`). Берёт на себя работу с bytes/tempfile, не зависит от Streamlit. Определяет протокол `OcrProvider` с одной реализацией — `OcrmypdfProvider`; при `provider=None` маршрутизирует через `ocr_auto_mode.convert_pdf_with_optional_ocr` без изменений в поведении.
-- **`ocr/`** — тракт MinerU (общие типы — `ocr/__init__.py`): `mineru_provider.py` (#61, облачный API v4 за протоколом `OcrProvider`, `result_from_zip` без сети), `cache.py` (#62, кэш сырого zip + `meta.json`), `postprocess.py` (#63, детерминированная чистка markdown), `validate.py` (#64, проверки + `report.json` + пометки), `diff.py` (#65, сверка прогонов `vlm`/`pipeline`), `cli.py` (#66, `python -m ocr.cli`: `run_pipeline` + `main`), `ingest.py` (#81, единый вход `.pdf/.docx/.xlsx`: выбор маршрута, один `report.json`).
+- **`ocr/`** — тракт MinerU (общие типы — `ocr/__init__.py`): `mineru_provider.py` (#61, облачный API v4 за протоколом `OcrProvider`, `result_from_zip` без сети), `cache.py` (#62, кэш сырого zip + `meta.json`), `postprocess.py` (#63, детерминированная чистка markdown), `validate.py` (#64, проверки + `report.json` + пометки), `diff.py` (#65, сверка прогонов `vlm`/`pipeline`), `cli.py` (#66, `python -m ocr.cli`: `run_pipeline` + `main`), `ingest.py` (#81, единый вход `.pdf/.docx/.xlsx`: выбор маршрута, один `report.json`), `board.py` (#82, `python -m ocr.board`: оффлайн-табло качества по фикстурам).
 
 OCR-тракт (режим `auto`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter` (subprocess `ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` по OCR-слою.
 
@@ -167,7 +173,8 @@ docx_converter/
 │   ├── validate.py         # проверки, report.json, пометки «!! ПРОВЕРИТЬ: … !!»
 │   ├── diff.py             # сверка прогонов vlm/pipeline
 │   ├── cli.py              # python -m ocr.cli
-│   └── ingest.py           # единый вход PDF/DOCX/XLSX (#81)
+│   ├── ingest.py           # единый вход PDF/DOCX/XLSX (#81)
+│   └── board.py            # python -m ocr.board — табло качества (#82)
 ├── requirements.txt
 ├── conftest.py             # пустой, нужен pytest для корневого rootdir
 ├── tests/

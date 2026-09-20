@@ -355,5 +355,24 @@ template_path=None)` → открыто `python-docx`.
 Правка приёмки 21.09.2026: `test_files/sample.pdf` — смешанный PDF (13-я из 13 страниц без слоя),
 детектор даёт `scan`; маршрут `text` в тестах закрыт синтетической вырезкой страниц 1–2
 `textpdf1.pdf` (`tests/test_ocr_ingest.py::two_page_text_pdf`), постоянной фикстуры на него нет.
+### ПРАВКА #82
 
-Следующий свободный номер — **#82** (закреплён за `ocr/board.py`, спека 09).
+`ocr/board.py` — табло качества `python -m ocr.board`, строго оффлайн. `build_board` кладёт
+`vlm_raw*.zip` во временный `LocalCache` и зовёт `ingest` с `provider_factory=_offline`
+(промах кэша — `RuntimeError`, рабочий `.cache/ocr/` не читается и не пишется). Строка табло —
+закрытый набор из 14 ключей, от маршрута не зависит; `count_diffs` / `threshold` — `null` до спеки 10.
+`main` пишет `_test/quality_board.json`, `_test/board/<stem>/out.md` + `report.json` и пять заготовок
+`<stem>.errors.txt` (у `bakeoff.pdf` — `golden.md`); существующий `errors.txt` не перезаписывается.
+
+Табло на 2026-09-21:
+
+| fixture | route | critical | warning | info | tables | table_broken | chars |
+|---|---|---|---|---|---|---|---|
+| `bakeoff.pdf` | scan | 5 | 7 | 2 | 1 | 0 | 20956 |
+| `bakeoff2.pdf` | scan | 2 | 3 | 2 | 1 | 0 | 17271 |
+| `bakeoff3.pdf` | scan | 0 | 3 | 8 | 5 | 0 | 20148 |
+| `textpdf1.pdf` | text_tables | 0 | 77 | 12 | 8 | 0 | 19554 |
+| `docx1.docx` | office | 0 | 1 | 0 | 4 | 0 | 6700 |
+| `xlsx1.xlsx` | office | 0 | 4 | 0 | 1 | 0 | 7636 |
+
+**Снимок нумерации (2026-09-21).** В коде `#1…#24, #26…#82`. Следующий свободный номер — **#83**.
