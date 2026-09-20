@@ -30,6 +30,7 @@ SEVERITY = {
     "mixed_alphabet_unknown": "warning",
     "translit_suspect": "critical",
     "signature_block": "warning",
+    "recovered_block": "info",                   # ПРАВКА #74
 }
 
 SNIPPET_LIMIT = 80
@@ -38,16 +39,25 @@ SNIPPET_LIMIT = 80
 NAME_RE = re.compile(r"^\s*[A-Za-zА-ЯЁ]\.\s?[A-Za-zА-ЯЁ]{1,3}\.\s+[A-Za-zА-Яа-яЁё-]+\s*$")
 
 _TOKEN_RE = re.compile(r"[^\W_]+")
-_NUMERO_RE = re.compile(r"\bNo\.?[ \t]*(?=\d|п/п)")
+# ПРАВКА #75в: «No КС-2» — тоже номер. Заглавная кириллица справа: «Nokia»,
+# «Note» и английское «No problem» под правило не попадают.
+_NUMERO_RE = re.compile(r"\bNo\.?[ \t]*(?=\d|п/п|[А-ЯЁ])")
 _DEGREE_RE = re.compile(
     r"[ \t]*\$\s*(?:C\s*\^\s*\{\s*\\circ\s*\}|\^\s*\{\s*\\circ\s*\}\s*C)\s*\$")
 _DEGREE_TAIL_RE = re.compile(r"°C[ \t]+(?=[;.,)])")
 # ПРАВКА #68: «;» или «:» вплотную к маркеру списка; «:---» — разделитель таблицы
 _LIST_GLUE_RE = re.compile(r"(?<=[;:])-(?!-)")
 # ПРАВКА #72: конец предложения вплотную к началу следующего. Слева ровно две
-# буквы (не цифры) — отсекает инициалы «И.М.», «т.е.Х» и нумерацию «1.3.4.»;
-# справа заглавная кириллица — отсекает «Windows 8.1» и «в т.ч.дистрибутивы».
-_SENTENCE_GLUE_RE = re.compile(r"(?<=[^\W\d_]{2})\.(?=[А-ЯЁ])")
+# буквы (не цифры) — отсекает инициалы «И.М.» и «т.е.Х»; справа заглавная
+# кириллица — отсекает «Windows 8.1» и «в т.ч.дистрибутивы».
+# ПРАВКА #75б: слева цифра — тоже склейка («2016.Климатический», «КС-3.Заказчик»,
+# «Приложение 1.План»). Ветки lookbehind разной ширины, но каждая своей — так
+# можно. «131.13330» под правило не попадает: справа цифра, а не заглавная буква.
+_SENTENCE_GLUE_RE = re.compile(r"(?:(?<=[^\W\d_]{2})|(?<=\d))\.(?=[А-ЯЁ])")
+# ПРАВКА #75а: маркер нумерованного списка вплотную к концу фразы —
+# «материалов.2. » → «материалов. 2. ». Номер не длиннее двух цифр и обязан
+# кончаться точкой с пробелом: «131.13330.2020» и «20x4,5x5,0м» не задеты.
+_LIST_NUMBER_GLUE_RE = re.compile(r"(?<=[.;:])(?=\d{1,2}\.\s)")
 _TABLE_TAG_RE = re.compile(r"</?table\b[^>]*>", re.I)
 _CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 _SEP_CELL_RE = re.compile(r":?-+:?")
@@ -92,6 +102,94 @@ def fold_to_cyrillic(token: str) -> str | None:
         else:
             out.append(char)
     return "".join(out)
+
+
+# --- 0. блоки, потерянные между content_list и full.md (ПРАВКА #74) ---------
+
+# MinerU не переносит в full.md блоки колонтитулов: на bakeoff2 так пропали
+# «СОГЛАСОВАНО … Д.В. Майер» и «УТВЕРЖДАЮ … К.В. Древко» со стр. 1 (тип header),
+# на bakeoff — «с. Сафарово, 2026 г.» (тип footer). Тип не перечисляем: возвращаем
+# всё, чего в тексте нет, кроме номеров страниц.
+RECOVER_SKIP_TYPES = ("page_number",)
+RECOVER_MIN_WORDS = 3
+# ПРАВКА #78: колонтитул шапки принадлежит верху своей страницы, а не месту за
+# предыдущим найденным блоком. На bakeoff2 «СОГЛАСОВАНО … УТВЕРЖДАЮ» идут в
+# content_list после таблицы, растянутой в full.md на весь документ, и врезка
+# уезжала в конец. Нижние колонтитулы (footer на bakeoff) остаются на месте:
+# им верх страницы противопоказан.
+RECOVER_TOP_TYPES = ("header",)
+_NO_LETTER_RE = re.compile(r"[\W\d_]+")
+
+
+def _block_text(block: dict) -> str:
+    """Текст блока content_list; text и table_body — необязательные, отсюда .get."""
+    return block.get("text") or block.get("table_body") or ""
+
+
+def _dropped_groups(md: str, content_list: list) -> list[tuple[int, list[dict]]]:
+    """Пропавшие блоки, сгруппированные по месту вставки в md.
+
+    Место — позиция сразу за предыдущим блоком content_list, который в md нашёлся:
+    так восстанавливается порядок самого content_list (он же порядок full.md).
+    Подряд идущие пропажи идут одной группой: «Д.В. Майер» — два слова, порогу
+    не отвечает, а без него «СОГЛАСОВАНО …» осталось бы без подписанта.
+
+    ПРАВКА #78: для группы из RECOVER_TOP_TYPES место — начало своей страницы,
+    то есть перед её первым найденным блоком, а не за предыдущим.
+    """
+    groups: list[tuple[int, list[dict]]] = []
+    group: list[dict] = []
+    page_start: dict[int, int] = {}
+    anchor = position = 0
+    for block in content_list:
+        text = _block_text(block)
+        if not text.strip():
+            continue
+        # номера страниц и блоки без единой буквы отсеиваются до поиска: «2»
+        # нашлось бы в любом месте текста и утащило бы якорь вперёд
+        if block["type"] in RECOVER_SKIP_TYPES or _NO_LETTER_RE.fullmatch(text):
+            continue
+        found = md.find(text, anchor)
+        if found < 0 and md.find(text) >= 0:
+            found = anchor                       # блок есть, но не по порядку
+        if found >= 0:
+            anchor = max(anchor, found + len(text))
+            page_start.setdefault(block.get("page_idx"), found)
+            if group:
+                groups.append((position, group))
+                group = []
+            continue
+        if not group:
+            position = (page_start.get(block.get("page_idx"), anchor)
+                        if block["type"] in RECOVER_TOP_TYPES else anchor)
+        group.append(block)
+    if group:
+        groups.append((position, group))
+    return groups
+
+
+def recover_dropped_blocks(md: str,
+                           content_list: list | None) -> tuple[str, list[Finding]]:
+    """ПРАВКА #74: вернуть в markdown текстовые блоки content_list, которых в нём нет."""
+    if not content_list:
+        return md, []
+    findings: list[Finding] = []
+    insertions = []
+    for position, group in _dropped_groups(md, content_list):
+        texts = [_block_text(block) for block in group]
+        joined = "\n\n".join(texts)
+        if len(joined.split()) <= RECOVER_MIN_WORDS:
+            continue
+        insertions.append((position, joined))
+        kinds = sorted({block["type"] for block in group})
+        findings.append(_finding(
+            "recovered_block", texts[0].split("\n")[0][:SNIPPET_LIMIT],
+            f"Блоков в content_list: {len(group)} (тип {', '.join(kinds)}); "
+            f"в full.md их нет, возвращены сюда — сверить со сканом"))
+    for position, joined in reversed(insertions):
+        md = (md[:position] + "\n\n" + joined + md[position:] if position
+              else joined + "\n\n" + md)
+    return md, findings
 
 
 # --- pipe-таблицы -----------------------------------------------------------
@@ -332,12 +430,20 @@ def _merge_pair(a_lines: list[str], b_lines: list[str],
 def _is_row_tail(row: list[str], target: list[str]) -> bool:
     """ПРАВКА #69: номер потерян, содержимого ≥ 2 ячеек, ширина как у предыдущей строки.
 
-    Ровно одна непустая ячейка — это не хвост, а разделитель («I. Общие данные»)
-    или продолжение с прошлой страницы, которое уже разобрал _merge_pair.
     Ширина обязана совпасть: иначе лишние ячейки пришлось бы выбросить.
+
+    ПРАВКА #76: одна непустая ячейка — хвост, только если это последняя ячейка
+    строки в три столбца и более, а у предыдущей строки последняя ячейка непуста.
+    Разделитель («I. Общие данные») непуст первой ячейкой, так что ни хвостом,
+    ни хозяином хвоста не станет: дописывать в него нечего и нечего продолжать.
     """
-    return (len(row) == len(target) and row[0] == ""
-            and len([cell for cell in row if cell]) >= 2)
+    if len(row) != len(target) or not row or row[0] != "":
+        return False
+    filled = [cell for cell in row if cell]
+    if len(filled) >= 2:
+        return True
+    return (len(row) >= 3 and len(filled) == 1
+            and bool(row[-1]) and bool(target[-1]))
 
 
 def _merge_row_tails(rows: list[list[str]],
@@ -426,11 +532,16 @@ def fix_list_glue(md: str) -> str:
 def fix_sentence_glue(md: str) -> str:
     """ПРАВКА #72: «проектом.Предусмотреть» → «проектом. Предусмотреть».
 
-    Узко: слева от точки две буквы подряд, справа — заглавная кириллическая.
-    Инициалы («И.М. Халиуллин», «т.е.Х»), нумерация пунктов («1.3.4.Требования»)
-    и версии («Windows 8.1») под шаблон не попадают.
+    Слева от точки две буквы подряд или цифра (ПРАВКА #75б: «2016.Климатический»,
+    «Приложение 1.План»), справа — заглавная кириллическая. Инициалы
+    («И.М. Халиуллин», «т.е.Х») и версии («Windows 8.1») под шаблон не попадают.
     """
     return _SENTENCE_GLUE_RE.sub(". ", md)
+
+
+def fix_list_number_glue(md: str) -> str:
+    """ПРАВКА #75а: «материалов.2. Подрядчик» → «материалов. 2. Подрядчик»."""
+    return _LIST_NUMBER_GLUE_RE.sub(" ", md)
 
 
 def _canonical(folded: str | None, allow_ip_code: bool) -> str | None:
@@ -505,9 +616,16 @@ def flag_signature_block(md: str) -> list[Finding]:
 
 # --- 9. цепочка -------------------------------------------------------------
 
-def postprocess(md: str) -> tuple[str, list[Finding]]:
-    """1 → 2 → … → 8 → cleanup_ocr_markdown. Находки — в порядке получения."""
+def postprocess(md: str, content_list: list | None = None) -> tuple[str, list[Finding]]:
+    """0 → 1 → 2 → … → 8 → cleanup_ocr_markdown. Находки — в порядке получения.
+
+    ПРАВКА #74: шаг 0 идёт до разбора таблиц — он ищет блоки content_list в
+    markdown дословно, а дальше по цепочке текст уже не тот. Без content_list
+    шаг 0 ничего не делает: так тракт работает на markdown-фикстурах.
+    """
     findings: list[Finding] = []
+    md, found = recover_dropped_blocks(md, content_list)      # ПРАВКА #74
+    findings += found
     md, found = html_tables_to_pipe(md)
     findings += found
     md, found = merge_split_tables(md)
@@ -516,6 +634,7 @@ def postprocess(md: str) -> tuple[str, list[Finding]]:
     md = fix_degree(md)
     md = fix_list_glue(md)                       # ПРАВКА #68
     md = fix_sentence_glue(md)                   # ПРАВКА #72
+    md = fix_list_number_glue(md)                # ПРАВКА #75а
     md, found = fix_mixed_alphabet(md)
     findings += found
     findings += flag_translit(md)

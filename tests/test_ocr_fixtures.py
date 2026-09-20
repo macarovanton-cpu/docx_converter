@@ -19,10 +19,12 @@ REPO_DIR = FIXTURES.parents[2]
 # два токена. 64 из них дают свой опкод, две попали внутрь соседних («°C;-» и
 # «РоЕ;-»). ПРАВКА #72: 76 → 79 — правка 9 («Ethernet.Для», «ПО.Работы») даёт два
 # опкода, правка 10 («(персональныйкомпьютер,») — один.
+# ПРАВКА #75: 79 → 99 — правка 11 («материалов.2. » → «материалов. 2. ») даёт
+# 19 опкодов, расширение правки 9 на цифру слева («Приложение 1.План») — один.
 # Разбор — в docs/docx_converter_docs_sync.md, «Метрика vlm→golden».
-VLM_TO_GOLDEN_DIFFS = 79
+VLM_TO_GOLDEN_DIFFS = 99
 # golden.md вне git — sha ловит тихую подмену эталона.
-GOLDEN_SHA256 = "ce357ca6c32be25943a0d265ed6e14191bc03338ddd9a4287b1835d706e6bdf2"
+GOLDEN_SHA256 = "f96c73ac39b3d2bdab4103963fa09305f36ed2eb8ed9191a68b71484740e1e59"
 
 
 def test_metric_and_golden_unchanged():
@@ -85,16 +87,33 @@ def test_fix_8_list_glue():
 
 
 def test_fix_9_sentence_glue():
-    """ПРАВКА #72: правка 9 — точка между предложениями разводится пробелом."""
+    """ПРАВКА #72: правка 9 — точка между предложениями разводится пробелом.
+
+    ПРАВКА #75б: слева от точки теперь и цифра — «Приложение 1.План» тоже
+    разводится, из «осталось как было» этот случай ушёл.
+    """
     vlm, golden = read_fixture("vlm.md"), read_fixture("golden.md")
-    glue = r"(?<=[^\W\d_]{2})\.(?=[А-ЯЁ])"
-    assert len(re.findall(glue, vlm)) == 2                     # «Ethernet.Для», «ПО.Работы»
+    glue = r"(?:(?<=[^\W\d_]{2})|(?<=\d))\.(?=[А-ЯЁ])"
+    assert len(re.findall(glue, vlm)) == 3     # «Ethernet.Для», «ПО.Работы», «1.План»
     assert not re.search(glue, golden)
     assert "RS-485,Ethernet. Для" in golden and "и ПО. Работы," in golden
+    assert "Приложение 1. План" in golden                      # ПРАВКА #75б
     # соседние точки под правило не попали и остались слитными
     assert "в т.ч.дистрибутивы" in golden                      # справа строчная
     assert "компания».Юридический" in golden                   # слева кавычка
-    assert "Приложение 1.План" in golden                       # слева цифра
+
+
+def test_fix_11_list_number_glue():
+    """ПРАВКА #75а: правка 11 — номер пункта, прилипший к концу фразы."""
+    vlm, golden = read_fixture("vlm.md"), read_fixture("golden.md")
+    glue = r"[.;:](?=\d{1,2}\.\s)"
+    assert len(re.findall(glue, vlm)) == 19                    # склеек в исходнике
+    assert not re.search(glue, golden)                         # в эталоне ни одной
+    assert "требования: 1. Платформа" in golden
+    assert "ГОСТ 380-2005. 2. Размер" in golden                # слева год, не номер пункта
+    # даты и номера стандартов под правило не попали: за точкой не «N. »
+    for same in ("30.12.2019", "10.01.2002", "21.1101-2020"):
+        assert same in golden
 
 
 def test_fix_10_row_tail_space():

@@ -4,14 +4,17 @@
 Сети и кэша спека не требует.
 """
 
+import re
 import zipfile
 
 from ocr import SEVERITIES
-from ocr_fixtures import count_diffs, read_fixture, require_fixture, text_tokens
-from ocr.postprocess import (fix_degree, fix_list_glue, fix_mixed_alphabet,
-                             fix_numero, fix_sentence_glue, flag_signature_block,
-                             flag_translit, html_tables_to_pipe, merge_split_tables,
-                             parse_pipe_tables, postprocess)
+from ocr_fixtures import (count_diffs, read_fixture, read_raw, require_fixture,
+                          text_tokens)
+from ocr.postprocess import (fix_degree, fix_list_glue, fix_list_number_glue,
+                             fix_mixed_alphabet, fix_numero, fix_sentence_glue,
+                             flag_signature_block, flag_translit, html_tables_to_pipe,
+                             merge_split_tables, parse_pipe_tables, postprocess,
+                             recover_dropped_blocks)
 from ocr.validate import validate
 from test_ocr_fixtures import VLM_TO_GOLDEN_DIFFS
 
@@ -48,7 +51,7 @@ def test_fixed_artifacts():
     assert "РоЕ" not in out and out.count("PoE") == 2
     # ПРАВКА #72: точка между предложениями разведена, соседние случаи — нет
     assert "RS-485,Ethernet. Для" in out and "и ПО. Работы," in out
-    assert "в т.ч.дистрибутивы" in out and "Приложение 1.План" in out
+    assert "в т.ч.дистрибутивы" in out and "Приложение 1. План" in out
 
 
 def test_not_fixed_without_scan():
@@ -112,6 +115,100 @@ def test_row_tail_merged_on_live_raw():
     assert "(персональный компьютер," in rows13[0][1]           # хвост первой ячейки
     assert "Ethernet. Для передачи данных" in rows13[0][2]      # хвост третьей
     assert "" not in [row[0] for row in table]
+    assert [f.rule for f in findings].count("table_merged") == 3
+    assert "table_empty_number" not in [f.rule for f in validate(out)]
+
+
+# --- обе фикстуры, сырые прогоны (ПРАВКА #74, #75, #76) ----------------------
+
+def run_raw(name):
+    """postprocess сырого прогона с content_list и без него."""
+    markdown, content_list = read_raw(name)
+    return postprocess(markdown, content_list), postprocess(markdown)
+
+
+def test_recovered_blocks_bakeoff2():
+    """ПРАВКА #74: «СОГЛАСОВАНО … Д.В. Майер» и «УТВЕРЖДАЮ …» со стр. 1 вернулись."""
+    (out, findings), (plain, plain_findings) = run_raw("vlm_raw2.zip")
+
+    for lost in ("СОГЛАСОВАНО", "Д.В. Майер", "УТВЕРЖДАЮ", "К.В. Древко",
+                 "ООО «Мангазея Майнинг»"):
+        assert lost not in plain and lost in out
+    recovered = [f for f in findings if f.rule == "recovered_block"]
+    assert len(recovered) == 1                       # три блока подряд — одна врезка
+    assert recovered[0].severity == "info" and recovered[0].snippet == "СОГЛАСОВАНО"
+    assert "header" in recovered[0].suggestion
+    # порядок блоков сохранён, подписант остался при своём блоке
+    assert out.index("СОГЛАСОВАНО") < out.index("Д.В. Майер") < out.index("УТВЕРЖДАЮ")
+    # ПРАВКА #78: врезка встала перед первым блоком своей страницы, а не за
+    # таблицей, растянутой на весь документ
+    assert out.startswith("СОГЛАСОВАНО")
+    assert (out.index("УТВЕРЖДАЮ") < out.index("«23» 04 2026 г.")
+            < out.index("## ТЕХНИЧЕСКОЕ ЗАДАНИЕ"))
+    # кроме врезки постпроцессор не изменился: те же правила в том же порядке
+    assert [f.rule for f in findings if f.rule != "recovered_block"] == \
+        [f.rule for f in plain_findings]
+
+
+def test_recovered_blocks_bakeoff():
+    """ПРАВКА #74: на bakeoff возвращается один колонтитул, номера страниц — нет."""
+    (out, findings), (plain, plain_findings) = run_raw("vlm_raw.zip")
+
+    recovered = [f for f in findings if f.rule == "recovered_block"]
+    assert len(recovered) == 1 and recovered[0].snippet == "с. Сафарово, 2026 г."
+    assert "с. Сафарово, 2026 г." not in plain and "с. Сафарово, 2026 г." in out
+    # ПРАВКА #78: нижний колонтитул остался на своём месте — под титулом, не над ним
+    assert out.startswith("Утверждаю:")
+    assert out.index("## ТЕХНИЧЕСКОЕ ЗАДАНИЕ") < out.index("с. Сафарово, 2026 г.")
+    for page_number in ("Лист 1 из 9", "Лист 5 из 9", "Лист 9 из 9"):
+        assert page_number not in out                # номера страниц не возвращаем
+    assert [f.rule for f in findings if f.rule != "recovered_block"] == \
+        [f.rule for f in plain_findings]
+    # одиночных цифр отдельными абзацами тоже не прибавилось
+    assert [b for b in out.split("\n\n") if b.strip().isdigit()] == []
+
+
+def test_recovery_needs_content_list():
+    """ПРАВКА #74: без content_list шаг 0 молчит — так тракт идёт по md-фикстурам."""
+    markdown, _ = read_raw("vlm_raw2.zip")
+    assert recover_dropped_blocks(markdown, None) == (markdown, [])
+    assert recover_dropped_blocks(markdown, []) == (markdown, [])
+    out, findings = postprocess(read_fixture("vlm.md"))
+    assert "recovered_block" not in [f.rule for f in findings]
+
+
+def test_glue_fixes_bakeoff2():
+    """ПРАВКА #75: склейки а/б/в на втором документе."""
+    (out, _), _ = run_raw("vlm_raw2.zip")
+
+    assert "СП 20.13330.2016. Климатический" in out            # б: слева цифра
+    assert "из своих материалов. 2. Подрядчик" in out          # а: номер пункта
+    assert "Заказчик: 1. Передает" in out
+    assert "форма № КС-2" in out and "форме № КС-3. Заказчик" in out    # в + б
+    assert "No " not in out and "20x4,5x5,0м" in out
+    assert not re.search(r"[.;:]\d{1,2}\.\s", out)
+    assert postprocess(out)[0] == out                           # идемпотентно
+
+
+def test_cell_tail_merged_bakeoff2():
+    """ПРАВКА #76: продолжение пункта 2.1 — текст только в последней ячейке."""
+    (out, findings), _ = run_raw("vlm_raw2.zip")
+    table = parse_pipe_tables(out)[0]
+
+    rows = [row for row in table if row[0] == "2.1"]
+    assert len(rows) == 1                                      # было две строки
+    assert "-Монтаж навеса под автовесовую" in rows[0][2]      # хвост дописан в конец
+    assert rows[0][2].index("Разработка рабочей документации") < \
+        rows[0][2].index("-Монтаж навеса")
+    assert "" not in [row[0] for row in table]
+    assert "table_empty_number" not in [f.rule for f in validate(out)]
+    merged = [f for f in findings if f.rule == "table_merged"]
+    assert len(merged) == 1 and "«2.1»" in merged[0].suggestion
+
+
+def test_cell_tail_leaves_bakeoff_alone():
+    """ПРАВКА #76: на bakeoff новая ветка ничего не склеила сверх прежних трёх."""
+    (out, findings), _ = run_raw("vlm_raw.zip")
     assert [f.rule for f in findings].count("table_merged") == 3
     assert "table_empty_number" not in [f.rule for f in validate(out)]
 
@@ -180,19 +277,39 @@ def test_fix_list_glue():
 
 
 def test_fix_sentence_glue():
-    """ПРАВКА #72: точка между предложениями; инициалы, нумерация и версии — мимо."""
+    """ПРАВКА #72: точка между предложениями; инициалы и версии — мимо."""
     assert fix_sentence_glue("проектом.Предусмотреть") == "проектом. Предусмотреть"
     assert fix_sentence_glue("Ethernet.Для и ПО.Работы") == "Ethernet. Для и ПО. Работы"
-    for same in ("И.М. Халиуллин", "т.е.Х", "1.3.4.Требования", "Windows 8.1",
-                 "в т.ч.дистрибутивы", "компания».Юридический", "Приложение 1.План",
+    # ПРАВКА #75б: слева цифра — тоже склейка
+    assert fix_sentence_glue("СП 20.13330.2016.Климатический") == "СП 20.13330.2016. Климатический"
+    assert fix_sentence_glue("1.3.4.Требования") == "1.3.4. Требования"
+    assert fix_sentence_glue("Приложение 1.План") == "Приложение 1. План"
+    for same in ("И.М. Халиуллин", "т.е.Х", "Windows 8.1", "СП 131.13330.2020",
+                 "в т.ч.дистрибутивы", "компания».Юридический",
                  "A.II. Taipov", "А.Ш. Таипов"):
         assert fix_sentence_glue(same) == same
     assert fix_sentence_glue(fix_sentence_glue("ПО.Работы")) == fix_sentence_glue("ПО.Работы")
 
 
+def test_fix_list_number_glue():
+    """ПРАВКА #75а: номер пункта, прилипший к концу фразы."""
+    assert fix_list_number_glue("материалов.2. Подрядчик") == "материалов. 2. Подрядчик"
+    assert fix_list_number_glue("Заказчик:1. Передает") == "Заказчик: 1. Передает"
+    assert fix_list_number_glue("передачи;2. Предоставляет") == "передачи; 2. Предоставляет"
+    assert fix_list_number_glue("ГОСТ 380-2005.2. Размер") == "ГОСТ 380-2005. 2. Размер"
+    for same in ("СП 131.13330.2020, СП", "п. 2.1, требованиями", "20x4,5x5,0м",
+                 "версия 1.2.3 сборки", "итого:100. Всего"):
+        assert fix_list_number_glue(same) == same
+    once = fix_list_number_glue("материалов.2. Подрядчик")
+    assert fix_list_number_glue(once) == once
+
+
 def test_fix_numero_and_degree():
     assert fix_numero("No1, No 12, No.7, Noп/п") == "№ 1, № 12, № 7, № п/п"
     assert fix_numero("Nokia Note ПNo1") == "Nokia Note ПNo1"
+    # ПРАВКА #75в: заглавная кириллица справа — тоже номер
+    assert fix_numero("форма No КС-2 и No КС-3") == "форма № КС-2 и № КС-3"
+    assert fix_numero("No problem, Note") == "No problem, Note"
     assert fix_degree("от +5 до +35  $C^{\\circ}$ .") == "от +5 до +35 °C."
     assert fix_degree("$x^2$") == "$x^2$"
 

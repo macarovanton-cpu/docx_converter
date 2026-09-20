@@ -83,14 +83,18 @@ def run_pipeline(pdf_bytes: bytes, *, source_name: str, work_dir: Path,
             provider_factory=provider_factory)
         model_version = mode
 
-    md, findings = postprocess(result.markdown)
+    # ПРАВКА #74: content_list идёт и в постпроцессор — он возвращает из него
+    # блоки, которых MinerU не положил в full.md
+    md, findings = postprocess(result.markdown, result.content_list)
     findings = findings + validate(md, result.content_list)
     if verify:
         second, _ = _mineru_result(
             pdf_bytes, OTHER_MODE[mode], work_dir=work_dir, cache=cache,
             provider_factory=provider_factory)
-        findings = findings + diff_findings(md, postprocess(second.markdown)[0],
-                                            result.content_list)
+        # второму прогону — свой content_list: иначе сверка приняла бы
+        # возвращённые блоки за расхождение прогонов
+        second_md = postprocess(second.markdown, second.content_list)[0]
+        findings = findings + diff_findings(md, second_md, result.content_list)
 
     report = build_report(source=source_name,
                           sha256=hashlib.sha256(pdf_bytes).hexdigest(),
