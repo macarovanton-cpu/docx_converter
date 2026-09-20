@@ -241,6 +241,32 @@ def main(argv: "list[str] | None" = None) -> int: ...
 
 ## Приёмочные тесты
 
+### Правка приёмки (21.09.2026, после первого прогона)
+
+Первый прогон спеки остановился: приёмка требовала
+`detect_route(test_files/sample.pdf) == "text"`, а правило маршрутов той же спеки
+отправляет этот файл в `scan` — 13-я из его 13 страниц без текстового слоя.
+Противоречие внутри спеки, дефекта в коде нет.
+
+**Правило маршрутизации не меняется.** Консервативность намеренная: смешанные PDF
+(текстовый документ со вклеенной сканированной страницей, скан подписной страницы
+в конце) у заказчиков обычны, и маршрут `text` потерял бы такую страницу целиком.
+`sample.pdf` — ровно этот случай, детектор на нём отработал верно. Подгонять правило
+под фикстуру запрещено.
+
+Меняются приёмочные assert-ы:
+
+- `detect_route(test_files/sample.pdf) == "scan"` (было `"text"`). В прогонах
+  маршрутов `sample.pdf` больше не участвует: проверяется только решение детектора,
+  без вызова `run_pipeline`.
+- Маршрут `text` закрывается **синтетической** фикстурой: pytest-фикстура вырезает
+  через `pypdf` страницы 1–2 из `_test/fixtures/ocr/textpdf1.pdf` во временный файл
+  в `tmp_path` (имя `text2p.pdf`). Проверено на файле: `find_tables()` по страницам
+  даёт `[0, 0, 1, 0, 1, 0, 5, 3, 2, 0]` — на первых двух таблиц нет при наличии
+  текстового слоя, значит маршрут `text` (MarkItDown, без сети).
+- Файл руками никуда не кладётся, sha не фиксируется, в табло качества и в эталоны
+  спеки 10 синтетическая вырезка не входит: она обслуживает только детектор.
+
 Сеть заглушена в обоих файлах: `monkeypatch.setattr(socket, "socket", <бросает AssertionError>)`.
 Пропуски — только через `require_fixture`. Временный кэш — в `tmp_path`.
 
@@ -252,16 +278,21 @@ for name, route in {"bakeoff.pdf": "scan", "bakeoff2.pdf": "scan", "bakeoff3.pdf
                     "textpdf1.pdf": "text_tables",
                     "docx1.docx": "office", "xlsx1.xlsx": "office"}.items():
     assert detect_route(require_fixture(name).read_bytes(), name) == route
-assert detect_route(Path("test_files/sample.pdf").read_bytes(), "SAMPLE.PDF") == "text"
+# смешанный PDF (13-я из 13 страниц без слоя) -> scan, не text
+assert detect_route(Path("test_files/sample.pdf").read_bytes(), "SAMPLE.PDF") == "scan"
+# синтетическая вырезка: страницы 1-2 textpdf1.pdf, слой есть, таблиц нет
+assert detect_route(two_page_text_pdf.read_bytes(), "text2p.pdf") == "text"
 with pytest.raises(ValueError, match="Неподдерживаемый формат"):
     detect_route(b"x", "a.pptx")
 
 # единый report на всех четырёх маршрутах
 KEYS = ["schema_version", "source", "sha256", "provider", "model_version",
         "cache_hit", "verified", "created_at", "summary", "findings"]
-for name, provider in (("bakeoff.pdf", "mineru"), ("textpdf1.pdf", "mineru"),
-                       ("docx1.docx", "markitdown"), ("xlsx1.xlsx", "markitdown"),
-                       ("sample.pdf", "markitdown")):
+for name, provider in (("bakeoff.pdf", "mineru"),        # scan
+                       ("textpdf1.pdf", "mineru"),       # text_tables
+                       ("text2p.pdf", "markitdown"),     # text, синтетическая вырезка
+                       ("docx1.docx", "markitdown"),     # office
+                       ("xlsx1.xlsx", "markitdown")):    # office
     md, report = ingest(data, source_name=name, work_dir=tmp_path / name,
                         cache=seeded_cache, provider_factory=offline)
     assert list(report) == KEYS and report["provider"] == provider
@@ -341,8 +372,10 @@ assert errors.read_text(encoding="utf-8").endswith("3 | а | б\n")
 ## PLACEHOLDER-ы
 
 1. `pdf_has_tables` на линиях: безрамочную таблицу не увидит, и такой PDF уйдёт в `text`
-   (MarkItDown, плоский текст). Приёмка держится на `textpdf1.pdf → text_tables`; если он
-   даёт `text` — **стоп**, не подбирать стратегию `text` наугад, решает человек.
+   (MarkItDown, плоский текст). Приёмка держится на `textpdf1.pdf → text_tables`; проверено 21.09.2026:
+   `find_tables()` даёт `[0, 0, 1, 0, 1, 0, 5, 3, 2, 0]` — двенадцать таблиц на пяти
+   страницах из десяти, маршрут определяется верно. Если на другом файле детектор даст
+   `text` там, где таблицы есть, — **стоп**, не подбирать стратегию наугад, решает человек.
    `# ponytail:` комментарий с этим потолком — в коде у функции.
 2. Пороги `MIN_TABLE_ROWS/COLS = 2` — стартовые, на одной фикстуре.
 3. XLSX через MarkItDown: объединённые ячейки и пустые клетки приходят как `NaN`/пустые.
@@ -350,8 +383,9 @@ assert errors.read_text(encoding="utf-8").endswith("3 | а | б\n")
    решение о своём рендере (openpyxl) — отдельная спека.
 4. Шкала ожиданий этапа A (сканы 8–8,5; текстовый PDF ~9; DOCX/XLSX 9,5+) формулы не имеет.
    Табло даёт факты (`count_diffs`, находки, целостность таблиц); балл ставит человек.
-5. Фикстуры на маршрут `text` нет: он закрыт только юнит-тестом на `test_files/sample.pdf`
-   и в табло не входит.
+5. Постоянной фикстуры на маршрут `text` нет: он закрыт синтетической вырезкой первых
+   двух страниц `textpdf1.pdf` (см. «Правка приёмки») и в табло не входит. Если маршрут
+   начнёт применяться в работе — завести отдельную фикстуру с эталоном.
 
 ## Коммит
 
