@@ -224,6 +224,33 @@ def test_code_digits_glued_on_fixtures():
                 if f.rule == "code_digits_glued"] == expected, name
 
 
+def test_rule_org_name_variant():
+    """ПРАВКА #80: редкий вариант названия — в находку, частый — в предложение."""
+    text = ("ООО «ГПИ имени Д.С. Косьяна» и ООО «ГПП имени Д.С. Косьяна», "
+            "ООО «ГПП имени Д.С. Косьяна»")
+    found = [f for f in validate(text) if f.rule == "org_name_variant"]
+    assert [(f.snippet, f.suggestion) for f in found] == \
+        [("«ГПИ имени Д.С. Косьяна»", "«ГПП имени Д.С. Косьяна»")]
+    assert found[0].severity == "warning"
+    # равная частота — кто из двоих опечатка, не сказать
+    assert rules("«ГПИ имени Косьяна» и «ГПП имени Косьяна»") == []
+    # различие не в букве (перенос строки) и короткие названия — не вариант
+    assert rules("«Башкирская\nкомпания» и «Башкирская компания» и «Башкирская компания»") == []
+    assert rules("«нуль» «нуля» «нуля»") == []
+
+
+def test_org_name_variant_on_fixtures():
+    """ПРАВКА #80: на bakeoff2 одна находка, на bakeoff ложных нет — флаг не нужен."""
+    for name, expected in (("vlm_raw2.zip", ["«ГПИ имени Д.С. Косьяна»"]),
+                           ("vlm_raw.zip", [])):
+        md = postprocess(*read_raw(name))[0]
+        assert [f.snippet for f in validate(md)
+                if f.rule == "org_name_variant"] == expected, name
+    for name in ("vlm.md", "golden.md", "pipeline.md"):
+        md = postprocess(read_fixture(name))[0]
+        assert "org_name_variant" not in [f.rule for f in validate(md)], name
+
+
 def test_rule_units_and_models():
     assert rules("не менее 10 MM") == ["unit_unknown"] and rules("не менее 10 мм, 12В") == []
     assert rules("весы BЕСТА-С60") == ["scale_model"] and rules("весы ВЕСТА-С60") == []

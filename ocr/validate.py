@@ -1,8 +1,10 @@
 """ПРАВКА #64: валидатор OCR-markdown, report.json, пометки в markdown."""
 
 import re
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timezone
+from itertools import permutations
 
 from ocr import SEVERITIES, Finding
 from ocr.postprocess import fold_to_cyrillic, parse_pipe_tables
@@ -29,9 +31,11 @@ SEVERITY = {
     "table_row_cells": "warning",
     "table_empty_number": "warning",
     "code_digits_glued": "warning",              # ПРАВКА #79
+    "org_name_variant": "warning",               # ПРАВКА #80
 }
 
 GLUED_CODE_SUGGESTION = "проверить границу с следующим пунктом"
+ORG_NAME_MIN_LEN = 5
 
 ANNOTATION_LIMIT = 200
 
@@ -58,6 +62,8 @@ _TU_TAIL_RE = re.compile(rf" ?\d+(\.\d+)*{_DASH}\d+{_DASH}\d+{_DASH}\d{{2,4}}")
 # четырёх цифр — к году прилип номер следующего пункта («СП 76.13330.20163»)
 _GLUED_CODE_RE = re.compile(
     rf"(?<![^\W\d_])(?:СП|СНиП|ГОСТ(?: Р)?|ТУ) ?\d+(?:(?:\.|{_DASH})\d+)*")
+# ПРАВКА #80: название организации — то, что стоит в «ёлочках» (без вложенных)
+_ORG_QUOTED_RE = re.compile(r"«([^«»]+)»")
 _UNIT_RE = re.compile(r"\d ?([^\W\d_]{1,3})(?![^\W\d_])")
 _NUMBER_CELL_RE = re.compile(r"\d+(\.\d+)*\.?")
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -184,6 +190,29 @@ def check_units(md: str) -> list[Finding]:
     return findings
 
 
+def _one_letter_apart(rare: str, common: str) -> bool:
+    """Одна подстановка буквы. Перенос строки вместо пробела вариантом не считается."""
+    if len(rare) != len(common):
+        return False
+    diff = [(a, b) for a, b in zip(rare, common) if a != b]
+    return len(diff) == 1 and diff[0][0].isalpha() and diff[0][1].isalpha()
+
+
+def check_org_names(md: str) -> list[Finding]:
+    """ПРАВКА #80: название организации в кавычках, отличающееся на одну букву.
+
+    «ГПИ имени Д.С. Косьяна» против «ГПП имени Д.С. Косьяна» — одна и та же
+    контора, букву разобрало двумя способами. Редкий вариант идёт в находку,
+    частый — в предложение; текст не правим, какой верен — видно по скану.
+    Равная частота находки не даёт: кто из двоих опечатка, тогда не сказать.
+    """
+    counts = Counter(match.group(1) for match in _ORG_QUOTED_RE.finditer(md))
+    names = [name for name in counts if len(name) >= ORG_NAME_MIN_LEN]
+    return [_finding("org_name_variant", f"«{rare}»", f"«{common}»")
+            for rare, common in permutations(names, 2)
+            if counts[rare] < counts[common] and _one_letter_apart(rare, common)]
+
+
 def check_scale_models(md: str) -> list[Finding]:
     """Марка весов не каноническим написанием: «BЕСТА-С60» → «ВЕСТА-С60»."""
     findings = []
@@ -272,7 +301,8 @@ def check_tables(md: str) -> list[Finding]:
 def validate(md: str, content_list: list | None = None) -> list[Finding]:
     """Все правила спеки 05 над постобработанным markdown."""
     findings = (check_requisites(md) + check_standards(md) + check_glued_codes(md)
-                + check_units(md) + check_scale_models(md) + check_tables(md))
+                + check_units(md) + check_org_names(md) + check_scale_models(md)
+                + check_tables(md))
     if content_list is None:
         return findings
     return [replace(f, page=page_of(f.snippet, content_list)) for f in findings]
