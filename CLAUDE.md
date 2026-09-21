@@ -75,7 +75,7 @@ Seven Python modules plus the `ocr/` package:
   - **`ocr/diff.py`** (#65) — word-level comparison of two runs (`vlm` vs `pipeline`); every divergence becomes a `low_confidence` finding. Text is never changed, no side is declared right.
   - **`ocr/cli.py`** (#66) — `python -m ocr.cli`: `run_pipeline` wires the whole tract (cache → provider → postprocess → validate → optional diff → report), `main` writes `out.md` / `report.json` and prints one JSON line. Stage 8's UI calls `run_pipeline` unchanged.
   - **`ocr/ingest.py`** (#81) — single entry for `.pdf` / `.docx` / `.xlsx`: `detect_route` (scan / text with tables / text / office), MinerU routes go to `run_pipeline` unchanged, MarkItDown routes go through the same `postprocess` + `validate` + `build_report`. `ocr.cli.main` calls `ingest`; `app.py` still calls `run_pipeline`.
-  - **`ocr/board.py`** (#82) — `python -m ocr.board`: offline quality board over the six fixtures (findings by rule, table integrity, size; `count_diffs` is `null` until spec 10). Never overwrites an existing `<stem>.errors.txt`.
+  - **`ocr/board.py`** (#82) — `python -m ocr.board`: offline quality board over the six fixtures (findings by rule, table integrity, size; #83: `count_diffs` / `threshold` / `per_1000_tokens` against per-fixture goldens). `--golden` builds `<stem>.golden.md` = draft + closed edit list from `<stem>.errors.txt` (`parse_errors` / `apply_errors`). Never overwrites an existing `<stem>.errors.txt`; never touches bakeoff's `golden.md`.
 
 OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
 
@@ -149,7 +149,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #81 — `ocr/ingest.py`, #82 — `ocr/board.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
@@ -174,6 +174,10 @@ Documented long-standing limits: column alignment from `:----` separators is not
 `_test/fixtures/ocr/` (PDF — из `vlm_raw*.zip` через временный кэш, промах — ошибка, не облако).
 Пишет `_test/quality_board.json`, черновики `_test/board/<имя>/out.md` + `report.json` и заготовки
 `_test/fixtures/ocr/<имя>.errors.txt` (существующие не перезаписывает — в них ручной труд).
+Колонки `diffs` / `thr` / `‰` — расхождения с эталоном, порог и расхождения на 1000 токенов (ПРАВКА #83).
+`--golden [--force]` собирает пять `<имя>.golden.md` из черновиков и `errors.txt` («было» — ровно одно
+вхождение, иначе ошибка); существующий эталон без `--force` — код `1`; `golden.md` бейкоффа не трогается
+никогда. Эталоны руками не правятся — только новой строкой в `errors.txt` + `--golden --force` + новые sha и порог.
 Код `0` — табло построено, `1` — исключение; критичные находки кода не меняют.
 
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.

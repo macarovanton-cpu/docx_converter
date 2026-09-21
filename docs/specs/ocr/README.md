@@ -20,6 +20,7 @@
 | `06-diff.md` | `ocr/diff.py` | **#65** |
 | `07-cli.md` | `ocr/cli.py` | **#66** |
 | `09-ingest-board.md` | `ocr/ingest.py`, `ocr/board.py` | **#81**, **#82** |
+| `10-golden-fixtures.md` | `ocr/board.py` (`--golden`, `count_diffs` в табло), пять `<stem>.golden.md` | **#83** |
 
 Номера закреплены заранее: 01 и 04 независимы и могут идти параллельно, без
 закрепления они бы столкнулись. Фактическая последняя правка в коде на момент
@@ -131,10 +132,12 @@ class Finding:
 | `bakeoff.pdf` | 9-страничный скан ТЗ, текстового слоя нет |
 | `pipeline.md` | выход MinerU `model_version=pipeline`, очень шумный |
 | `vlm.md` | выход MinerU `model_version=vlm` |
-| `golden.md` | эталон, собирается в спеке 00 |
+| `golden.md` | эталон, собирается в спеке 00 (правки 1–11; правка 11 — спека 10) |
 | `bakeoff2.pdf`, `bakeoff3.pdf` | сканы, 8 и 9 страниц; сырые выходы — `vlm_raw2.zip`, `vlm_raw3.zip` (спека 09) |
 | `textpdf1.pdf` | текстовый PDF с таблицами, 10 страниц; сырой выход — `vlm_raw_textpdf1.zip` (спека 09) |
 | `docx1.docx`, `xlsx1.xlsx` | офисные входы, родная конвертация MarkItDown, сырого zip нет (спека 09) |
+| `<stem>.errors.txt` | пять файлов человека: закрытый список правок `страница \| было \| надо` (спека 10). Только читать |
+| `<stem>.golden.md` | пять эталонов = черновик тракта + `errors.txt`; собирает `python -m ocr.board --golden`, руками не правятся (спека 10) |
 | `vlm_raw.zip` | сырой ответ MinerU (`vlm`) живого прогона: `full.md`, `content_list.json`, картинки. Пишется live-тестом спеки 02, используется тестами спек 04 (#69) и 05 |
 
 Записанных ответов API (HTTP) среди фикстур **нет** — см. PLACEHOLDER-ы. Сырой

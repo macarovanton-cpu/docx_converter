@@ -1,4 +1,7 @@
-"""ПРАВКА #82: приёмочные тесты табло качества ocr.board. Сети нет вообще."""
+"""ПРАВКА #82: приёмочные тесты табло качества ocr.board. Сети нет вообще.
+
+ПРАВКА #83: count_diffs / threshold / per_1000_tokens заполнены по эталонам.
+"""
 
 import json
 import shutil
@@ -8,12 +11,12 @@ import pytest
 
 from ocr import SEVERITIES
 from ocr import board as board_module
-from ocr.board import BOARD, ERRORS_HEADER, build_board, main
+from ocr.board import BOARD, ERRORS_HEADER, GOLDEN, THRESHOLDS, build_board, main
 from ocr_fixtures import require_fixture
 
 ROW_KEYS = ["fixture", "route", "provider", "critical", "warning", "info", "by_rule",
             "tables", "table_rows", "table_broken", "chars", "tokens",
-            "count_diffs", "threshold"]
+            "count_diffs", "threshold", "per_1000_tokens"]
 
 
 @pytest.fixture(autouse=True)
@@ -37,12 +40,18 @@ def test_build_board(tmp_path):
         for name in pair:
             if name is not None:
                 require_fixture(name)
+    for golden_name in GOLDEN.values():
+        require_fixture(golden_name)
     board, outputs = build_board(tmp_path)
     rows = board["rows"]
     assert board["schema_version"] == 1
     assert [r["fixture"] for r in rows] == [name for name, _ in BOARD] and len(rows) == 6
     assert all(list(r) == ROW_KEYS for r in rows)               # одна метрика на все форматы
-    assert all(r["count_diffs"] is None and r["threshold"] is None for r in rows)
+    for r in rows:                                              # ПРАВКА #83
+        assert r["count_diffs"] is not None and r["count_diffs"] <= r["threshold"]
+        assert r["threshold"] == THRESHOLDS[r["fixture"]]
+        assert r["per_1000_tokens"] is not None
+    assert next(r for r in rows if r["fixture"] == "bakeoff.pdf")["count_diffs"] == 13  # сырой путь, факт 21.09.2026
     for r in rows:
         md, report = outputs[r["fixture"]]
         assert (r["critical"], r["warning"], r["info"]) == tuple(
@@ -52,6 +61,14 @@ def test_build_board(tmp_path):
         assert r["chars"] == len(md) > 0
     assert next(r for r in rows if r["fixture"] == "bakeoff.pdf")["critical"] == 5   # как в test_ocr_cli
     assert next(r for r in rows if r["fixture"] == "xlsx1.xlsx")["tables"] >= 1
+
+
+def test_board_without_goldens(tmp_path):
+    """ПРАВКА #83: нет *.golden.md — три ключа None, табло строится (поведение спеки 09)."""
+    board, _ = build_board(tmp_path / "x", fixtures=copy_fixtures(tmp_path / "fx"))
+    assert len(board["rows"]) == 6
+    for r in board["rows"]:
+        assert r["count_diffs"] is None and r["threshold"] is None and r["per_1000_tokens"] is None
 
 
 def test_cache_miss_fails_offline(tmp_path):
