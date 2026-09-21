@@ -24,6 +24,7 @@
 | `10-golden-fixtures.md` | `ocr/board.py` (`--golden`, `count_diffs` в табло), пять `<stem>.golden.md` | **#83** |
 | `11-hygiene.md` | `ocr/board.py` (номер строки `errors.txt` в ошибке), `requirements.txt`, документы | **#84** |
 | `12-ui-ingest.md` | `app.py` (режим MinerU зовёт `ocr.ingest.ingest`: DOCX/XLSX получают проверку и `report.json`) | **#85** |
+| `13-verifier-measure.md` | `pdf_core.py` (`Verifier`), `ocr/gemini_verifier.py`, `ocr/measure.py` (измерение vision-сверки; в тракт не подключено) | **#86**, **#87** |
 
 Номера закреплены заранее: 01 и 04 независимы и могут идти параллельно, без
 закрепления они бы столкнулись. Фактическая последняя правка в коде на момент
