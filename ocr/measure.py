@@ -1,8 +1,11 @@
 """ПРАВКА #87: измерение vision-сверки на остатке эталонов. В тракт не подключено.
-ПРАВКА #88: модель переписывает полосы вырезки, вердикт — локальный diff по text_tokens."""
+ПРАВКА #88: модель переписывает полосы вырезки, вердикт — локальный diff по text_tokens.
+ПРАВКА #89: бэкенд — Claude Code (claude -p); --verifier / --model / --fixture."""
 
+import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -17,6 +20,7 @@ from pathlib import Path
 import PIL.Image
 
 from ocr.board import BOARD, FIXTURES, GOLDEN, build_board, count_diffs, text_tokens
+from ocr.claude_code_verifier import CLAUDE_MODEL, ClaudeCodeVerifier
 from ocr.gemini_verifier import (CONTEXT_TOKENS, VerifierAuthError, VerifierConfigError, VerifierError,
                                  VerifierQuotaError, crop_block, locate_block)
 from ocr.postprocess import HOMOGLYPHS_CYR_TO_LAT
@@ -36,6 +40,7 @@ WINDOW_SLACK = 3             # окно транскрипции длиннее 
 MIN_RATIO = 0.5              # PLACEHOLDER: SequenceMatcher.ratio лучшего окна ниже — место не найдено
 MARKERS = frozenset("-–—•*·")   # токен только из этих знаков — маркер списка, в сравнении не участвует
 STOP_ERRORS = (VerifierQuotaError, VerifierAuthError, VerifierConfigError)
+VERIFIERS = ("claude-code", "gemini")         # ПРАВКА #89
 NO_RULE = "—"
 
 TRANSCRIBE_QUESTION = (
@@ -410,9 +415,12 @@ def write_review(measure: dict, path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def make_verifier() -> Verifier:
-    raise VerifierConfigError("бэкенд транскрипции не подключён: Gemini отвечает только на вопрос #87, "
-                              "Claude Code — ПРАВКА #89")
+def make_verifier(name: str, model: str | None) -> Verifier:
+    """ПРАВКА #89: бэкенд транскрипции по имени; Gemini транскрипции не умеет — решение человека 21.09.2026."""
+    if name == "gemini":
+        raise VerifierConfigError("Gemini отвечает только на вопрос #87 (вердикт по фрагменту), транскрипции у него "
+                                  "нет — в замер не подключён (решение человека 21.09.2026)")
+    return ClaudeCodeVerifier(model=model or CLAUDE_MODEL)
 
 
 def _print_table(rows: list[dict]) -> None:
@@ -426,11 +434,26 @@ def _print_table(rows: list[dict]) -> None:
 
 
 def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -X utf8 -m ocr.measure",
+                                     description="Замер vision-сверки на остатке эталонов (в тракт не подключено)")
+    parser.add_argument("--verifier", default=os.environ.get("VERIFIER", "claude-code"), help=" | ".join(VERIFIERS))
+    parser.add_argument("--model", default=None, help="по умолчанию — модель бэкенда")
+    parser.add_argument("--fixture", action="append", default=[], help="имя из BOARD; повторяемый")
+    args = parser.parse_args(argv)
+    board_names = [name for name, _ in BOARD]
+    if args.verifier not in VERIFIERS:
+        print(f"неизвестный бэкенд {args.verifier!r}: {', '.join(VERIFIERS)}", file=sys.stderr)
+        return 1
+    if unknown := [name for name in args.fixture if name not in board_names]:
+        print(f"нет в BOARD: {unknown}; есть {board_names}", file=sys.stderr)
+        return 1
     try:
         # глобалы читаются в момент вызова: тесты подменяют пути и make_verifier
         with tempfile.TemporaryDirectory() as work:
             _, outputs = build_board(Path(work), fixtures=FIXTURES)
         cases = build_cases(outputs, fixtures=FIXTURES)
+        if args.fixture:
+            cases = [case for case in cases if case.fixture in args.fixture]
         pages = page_tiles(cases)
         for stem in dict.fromkeys(Path(fixture).stem for fixture, _ in pages):   # полосы — до обращения к модели
             shutil.rmtree(CROPS_DIR / stem, ignore_errors=True)
@@ -439,7 +462,7 @@ def main(argv: "list[str] | None" = None) -> int:
                 path = CROPS_DIR / Path(fixture).stem / _tile_name(page, number)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(tile)
-        verifier = make_verifier()
+        verifier = make_verifier(args.verifier, args.model)
         measure = run_measure(cases, verifier)
         for table in ("by_fixture", "by_rule", "by_block_type", "by_kind"):
             _print_table(measure[table])
@@ -450,6 +473,8 @@ def main(argv: "list[str] | None" = None) -> int:
               f"{round(sum(c['input_tokens'] for c in calls) / len(calls)) if calls else 0}, "
               f"выходных всего {sum(c['output_tokens'] for c in calls)}")
         suffix = f"{measure['verifier']}.{measure['model']}"
+        if args.fixture:
+            suffix += "." + "+".join(Path(name).stem for name in board_names if name in args.fixture)
         MEASURE_DIR.mkdir(parents=True, exist_ok=True)
         (MEASURE_DIR / f"verify_measure.{suffix}.json").write_text(
             json.dumps(measure, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -25,6 +25,7 @@
 | `11-hygiene.md` | `ocr/board.py` (номер строки `errors.txt` в ошибке), `requirements.txt`, документы | **#84** |
 | `12-ui-ingest.md` | `app.py` (режим MinerU зовёт `ocr.ingest.ingest`: DOCX/XLSX получают проверку и `report.json`) | **#85** |
 | `13-verifier-measure.md` | `pdf_core.py` (`Verifier`), `ocr/gemini_verifier.py`, `ocr/measure.py` (измерение vision-сверки; в тракт не подключено) | **#86**, **#87** |
+| `14-verifier-claude-code.md` | `pdf_core.py` (`Verifier.transcribe`), `ocr/measure.py` (полосы, транскрипция, локальный вердикт, `--verifier/--model/--fixture`), `ocr/claude_code_verifier.py` (`claude -p`, только локально) | **#88**, **#89** |
 
 Номера закреплены заранее: 01 и 04 независимы и могут идти параллельно, без
 закрепления они бы столкнулись. Фактическая последняя правка в коде на момент
@@ -178,3 +179,8 @@ zip и `content_list.json` появились после живого прого
 7. Точное значение `VLM_TO_GOLDEN_DIFFS` — расчётное 14, фиксирует исполнитель
    спеки 00.
 8. Бэкенд кэша `drive` — не реализуется, `NotImplementedError` (спека 03, этап 8).
+9. Спека 14 (vision-сверка через `claude -p`): размер полос `TILE_HEIGHT` / `TILE_OVERLAP`, окно `MIN_RATIO` /
+   `WINDOW_SLACK`, маркеры ошибок `AUTH_MARKERS` / `LIMIT_MARKERS`, stdin и `--system-prompt` при входе по подписке,
+   `CLAUDE_TIMEOUT_SEC` и `--max-turns` — сверяются первым живым прогоном. Форма успешного ответа `claude -p
+   --output-format json` **закрыта** живым образцом человека (`tests/fixtures/claude_p_sample.json`, 22.09.2026).
+   PLACEHOLDER 5 спеки 13 (строки таблиц) остаётся открытым; 4, 6, 7, 9 спеки 13 закрыты спекой 14.

@@ -1,6 +1,8 @@
 """ПРАВКА #87: приёмочные тесты ocr.measure. Verifier — фейковый, ответы строятся из эталонов. Сети нет.
-ПРАВКА #88: модель переписывает полосы, вердикт — judge; фейки отвечают транскрипцией полос."""
+ПРАВКА #88: модель переписывает полосы, вердикт — judge; фейки отвечают транскрипцией полос.
+ПРАВКА #89: выбор бэкенда, --fixture, настоящий ClaudeCodeVerifier без CLAUDE_CODE_LIVE."""
 
+import functools
 import json
 import socket
 import subprocess
@@ -12,12 +14,14 @@ import pytest
 
 from ocr import measure as measure_module
 from ocr.board import BOARD, GOLDEN, build_board
-from ocr.gemini_verifier import VerifierError, VerifierQuotaError
+from ocr.claude_code_verifier import CLAUDE_MODEL, ClaudeCodeVerifier
+from ocr.gemini_verifier import VerifierConfigError, VerifierError, VerifierQuotaError
 from ocr.measure import (MIN_RATIO, TILE_HEIGHT, TRANSCRIBE_QUESTION, Case, build_cases, error_kind, judge, main,
-                         page_tiles, run_measure, split_tiles)
+                         make_verifier, page_tiles, run_measure, split_tiles)
 from ocr_fixtures import require_fixture
 
 OFFICE = ("docx1.docx", "xlsx1.xlsx")
+bare_make_verifier = make_verifier
 
 
 @pytest.fixture(autouse=True)
@@ -268,11 +272,10 @@ def test_run_measure(built):
 
 def test_main(built, tmp_path, monkeypatch, capsys):
     _, _, cases = built
-    bare_make_verifier = measure_module.make_verifier
     crops = tmp_path / "verify_crops"
     monkeypatch.setattr(measure_module, "MEASURE_DIR", tmp_path)
     monkeypatch.setattr(measure_module, "CROPS_DIR", crops)
-    monkeypatch.setattr(measure_module, "make_verifier", lambda: Golden(cases))
+    monkeypatch.setattr(measure_module, "make_verifier", lambda name, model: Golden(cases))
     assert main([]) == 0
     written = json.loads((tmp_path / "verify_measure.fake.golden.json").read_text(encoding="utf-8"))
     assert written["complete"] and written["totals"]["found"] == 50
@@ -284,16 +287,29 @@ def test_main(built, tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "сумма строк может превышать measured" in out and "вызовов 0, картинок 0" in out
 
-    # одна ложная тревога -> в отчёте для сверки её id, полоса и фрагмент
-    alarm = next(c for c in cases if c.kind == "control")
 
+@pytest.fixture
+def quick(built, tmp_path, monkeypatch):
+    """main без пересборки табло: build_board / build_cases отдают готовое, пути — во временной папке."""
+    _, outputs, cases = built
+    monkeypatch.setattr(measure_module, "MEASURE_DIR", tmp_path)
+    monkeypatch.setattr(measure_module, "CROPS_DIR", tmp_path / "verify_crops")
+    monkeypatch.setattr(measure_module, "build_board", lambda work, fixtures: (None, outputs))
+    monkeypatch.setattr(measure_module, "build_cases", lambda outputs, fixtures: cases)
+    return cases
+
+
+def test_review(quick, tmp_path, monkeypatch):
+    # одна ложная тревога -> в отчёте для сверки её id, полоса и фрагмент
+    cases = quick
+    alarm = next(c for c in cases if c.kind == "control")
     tokens = alarm.fragment.split()
     altered = " ".join(tokens[:3] + ["лишнее"] + tokens[3:])
 
     class OneAlarm(Transcriber):
         def transcribe(self, images, question):
             return [text.replace(alarm.fragment, altered) for text in super().transcribe(images, question)]
-    monkeypatch.setattr(measure_module, "make_verifier", lambda: OneAlarm(cases, "expected", " ¶ "))
+    monkeypatch.setattr(measure_module, "make_verifier", lambda name, model: OneAlarm(cases, "expected", " ¶ "))
     assert main([]) == 0
     review = (tmp_path / "verify_review.fake.golden.md").read_text(encoding="utf-8")
     row = next(r for r in json.loads((tmp_path / "verify_measure.fake.golden.json").read_text(encoding="utf-8"))["cases"]
@@ -301,13 +317,47 @@ def test_main(built, tmp_path, monkeypatch, capsys):
     assert row["outcome"] == "false_alarm"
     assert f"### {alarm.id} · false_alarm" in review and f"![]({row['crop']})" in review
     assert f"- фрагмент: `{alarm.fragment}`" in review and "Модель ошиблась — случай остаётся ложной тревогой" in review
+    assert "`∅` → `лишнее` (chars)" in review
 
-    # без подмены (#88): бэкенда нет -> код 1, полосы уже записаны
+
+def test_backends(quick, tmp_path, monkeypatch, capsys):
+    cases = quick
+    with pytest.raises(VerifierConfigError, match="#87"):
+        make_verifier("gemini", None)
+    assert isinstance(make_verifier("claude-code", None), ClaudeCodeVerifier)
+    assert make_verifier("claude-code", None).model == CLAUDE_MODEL
+    assert make_verifier("claude-code", "claude-opus-5").model == "claude-opus-5"
+
+    assert main(["--verifier", "gemini"]) == 1 and "#87" in capsys.readouterr().err
+    monkeypatch.setenv("VERIFIER", "gemini")
+    assert main([]) == 1 and "#87" in capsys.readouterr().err
+    monkeypatch.delenv("VERIFIER")
+    assert main(["--verifier", "openai"]) == 1 and main(["--fixture", "nope.pdf"]) == 1
+
+    # --fixture: остаются случаи только этой фикстуры, имя файла с суффиксом
+    asked = []
+    monkeypatch.setattr(measure_module, "make_verifier", lambda name, model: asked.append((name, model)) or Golden(cases))
+    assert main(["--fixture", "bakeoff.pdf", "--model", "claude-opus-5"]) == 0
+    assert asked == [("claude-code", "claude-opus-5")]
+    one = json.loads((tmp_path / "verify_measure.fake.golden.bakeoff.json").read_text(encoding="utf-8"))
+    assert {r["fixture"] for r in one["cases"]} == {"bakeoff.pdf"} and [r["fixture"] for r in one["by_fixture"]] == [
+        "bakeoff.pdf"]
+    assert (tmp_path / "verify_review.fake.golden.bakeoff.md").is_file()
+    # полосы остальных фикстур (записаны прогонами с gemini выше) не стёрты
+    assert sorted(p.name for p in (tmp_path / "verify_crops").iterdir()) == ["bakeoff", "bakeoff2", "bakeoff3", "textpdf1"]
+    assert main(["--fixture", "textpdf1.pdf", "--fixture", "bakeoff.pdf"]) == 0
+    assert (tmp_path / "verify_measure.fake.golden.bakeoff+textpdf1.json").is_file()
+
+    # настоящий ClaudeCodeVerifier, холодный кэш, без CLAUDE_CODE_LIVE: стоп с кодом 1, claude не запускался
+    runs = []
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: runs.append(args))
     monkeypatch.setattr(measure_module, "make_verifier", bare_make_verifier)
-    monkeypatch.setattr(measure_module, "MEASURE_DIR", tmp_path / "bare")
-    monkeypatch.setattr(measure_module, "CROPS_DIR", tmp_path / "bare" / "verify_crops")
+    monkeypatch.setattr(measure_module, "ClaudeCodeVerifier",
+                        functools.partial(ClaudeCodeVerifier, cache_root=tmp_path / "cold"))
     capsys.readouterr()
     assert main([]) == 1
-    assert "ПРАВКА #89" in capsys.readouterr().err
-    assert len(list((tmp_path / "bare" / "verify_crops").rglob("p*-*.png"))) == len(
-        {t for c in cases for t in c.tiles})
+    assert "CLAUDE_CODE_LIVE" in capsys.readouterr().err and runs == []
+    stopped = json.loads((tmp_path / "verify_measure.claude-code.claude-sonnet-5.json").read_text(encoding="utf-8"))
+    assert not stopped["complete"] and stopped["calls"] == []
+    assert all(r["outcome"] in (None, "unlocated", "no_image") for r in stopped["cases"])
+    assert not (tmp_path / "cold").exists()
