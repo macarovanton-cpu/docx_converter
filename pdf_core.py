@@ -45,6 +45,24 @@ class OcrProvider(Protocol):
                 page_range: str | None = None) -> OcrResult: ...
 
 
+# ПРАВКА #86: сверка фрагмента текста с изображением страницы (этап B).
+VERDICTS = ("agree", "fix", "unreadable")
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    verdict: str                 # одно из VERDICTS
+    correction: str | None       # весь фрагмент в исправленном виде; только при verdict == "fix"
+    confidence: float            # 0–1, самооценка модели (см. PLACEHOLDER 4)
+    raw: str                     # сырой текст ответа модели
+
+
+class Verifier(Protocol):
+    """Картинка вырезки + фрагмент + вопрос -> вердикт. Один фрагмент — один вызов."""
+
+    def verify(self, image_png: bytes, fragment: str, question: str) -> VerifyResult: ...
+
+
 class OcrmypdfProvider:
     """Текущий движок: ocrmypdf -> searchable PDF -> markitdown."""
 
