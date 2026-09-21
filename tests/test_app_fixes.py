@@ -1,5 +1,6 @@
 """Тесты трёх падений в app.py (запускать из docx_converter/)."""
 import io
+import socket
 import zipfile
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from pypdf import PdfReader, PdfWriter
 import app
 from convert import STYLES, convert_md_to_docx
 from ocr.mineru_provider import MineruAuthError, MineruError
+from ocr_fixtures import require_fixture
 from pdf_core import PageInfo
 
 
@@ -124,6 +126,26 @@ def test_get_template_downloads_selected_drive_id(monkeypatch):
 
 # --- ПРАВКА #73: MinerU в режиме «Файлы -> Markdown» -------------------------
 
+@pytest.fixture
+def no_network(monkeypatch):
+    """ПРАВКА #85: как в tests/test_ocr_golden.py, но только для тестов блока #73/#85."""
+    def refuse(*args, **kwargs):
+        raise AssertionError("тест полез в сеть")
+    monkeypatch.setattr(socket, "socket", refuse)
+
+
+_offline = pytest.mark.usefixtures("no_network")
+
+
+def _blank_pdf(pages: int) -> bytes:
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=200, height=200)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def _make_zip(full_md: str) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -188,11 +210,12 @@ def test_mineru_api_key_absent(monkeypatch):
     assert app._mineru_api_key() is None
 
 
-def test_mineru_mode_runs_pipeline_with_fake_provider(monkeypatch, tmp_path):
-    """ПРАВКА #73: UI зовёт run_pipeline, в результате — markdown и отчёт."""
+@_offline
+def test_mineru_mode_runs_ingest_with_fake_provider(monkeypatch, tmp_path):
+    """ПРАВКА #73/#85: UI зовёт ingest, в результате — markdown и отчёт."""
     calls = _fake_mineru(monkeypatch, tmp_path, vlm="# Договор\n\nТекст договора.")
 
-    result = app._convert_uploaded_file(_FakeUpload("скан.pdf"), None,
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
                                         ocr_mode="mineru")
 
     assert result["error"] is None
@@ -200,14 +223,16 @@ def test_mineru_mode_runs_pipeline_with_fake_provider(monkeypatch, tmp_path):
     assert result["report"]["provider"] == "mineru"
     assert result["report"]["verified"] is False
     assert calls == ["vlm"]
+    assert result["route"] == "scan"
 
 
+@_offline
 def test_mineru_mode_verify_runs_second_model(monkeypatch, tmp_path):
     calls = _fake_mineru(monkeypatch, tmp_path,
                          vlm="Цена 100 рублей за штуку товара.",
                          pipeline="Цена 700 рублей за штуку товара.")
 
-    result = app._convert_uploaded_file(_FakeUpload("скан.pdf"), None,
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
                                         ocr_mode="mineru", verify=True)
 
     assert result["error"] is None
@@ -217,6 +242,7 @@ def test_mineru_mode_verify_runs_second_model(monkeypatch, tmp_path):
     assert low_conf, "расхождение 100/700 должно стать находкой low_confidence"
 
 
+@_offline
 def test_mineru_auth_error_gets_key_hint(monkeypatch, tmp_path):
     """ПРАВКА #73: ошибка ключа — текстом с подсказкой, не трейсбеком."""
     def factory(api_key, status):
@@ -227,7 +253,7 @@ def test_mineru_auth_error_gets_key_hint(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "_mineru_provider_factory", factory)
     monkeypatch.setattr(app, "_OCR_CACHE_ROOT", tmp_path / "cache")
 
-    result = app._convert_uploaded_file(_FakeUpload("скан.pdf"), None,
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
                                         ocr_mode="mineru")
 
     assert "A0202" in result["error"]
@@ -235,6 +261,7 @@ def test_mineru_auth_error_gets_key_hint(monkeypatch, tmp_path):
     assert result["report"] is None
 
 
+@_offline
 def test_mineru_error_shown_as_text_without_hint(monkeypatch, tmp_path):
     def factory(api_key, status):
         def build(model_version):
@@ -244,19 +271,10 @@ def test_mineru_error_shown_as_text_without_hint(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "_mineru_provider_factory", factory)
     monkeypatch.setattr(app, "_OCR_CACHE_ROOT", tmp_path / "cache")
 
-    result = app._convert_uploaded_file(_FakeUpload("скан.pdf"), None,
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
                                         ocr_mode="mineru")
 
     assert result["error"] == "распознавание не удалось: boom"
-
-
-def _blank_pdf(pages: int) -> bytes:
-    writer = PdfWriter()
-    for _ in range(pages):
-        writer.add_blank_page(width=200, height=200)
-    buffer = io.BytesIO()
-    writer.write(buffer)
-    return buffer.getvalue()
 
 
 def test_pdf_page_subset_cuts_selected_pages():
@@ -282,3 +300,86 @@ def test_split_findings_separates_low_confidence():
 
     assert [f["rule"] for f in main] == ["inn_checksum", "gost_format"]
     assert [f["rule"] for f in low_conf] == ["low_confidence"]
+
+
+# --- ПРАВКА #85: UI на едином входе ocr.ingest -------------------------------
+
+REPORT_KEYS = ["schema_version", "source", "sha256", "provider", "model_version",
+               "cache_hit", "verified", "created_at", "summary", "findings"]
+RESULT_KEYS = {"filename", "download_name", "file_type", "page_range", "ocr_status",
+               "markdown", "report", "route", "error"}
+
+
+def _docx_bytes() -> bytes:
+    doc = Document()
+    doc.add_heading("Договор поставки", level=1)
+    doc.add_paragraph("Поставщик обязуется передать товар.")
+    table = doc.add_table(rows=2, cols=2)
+    for r, row in enumerate((("Товар", "Цена"), ("Весы", "100"))):
+        for c, text in enumerate(row):
+            table.cell(r, c).text = text
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+def _xlsx_bytes() -> bytes:
+    from openpyxl import Workbook
+
+    book = Workbook()
+    for row in (("Позиция", "Сумма"), (1, 100), (2, 250)):
+        book.active.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+@_offline
+@pytest.mark.parametrize("name, data", [("док.docx", _docx_bytes()), ("табл.xlsx", _xlsx_bytes())],
+                         ids=["docx", "xlsx"])   # без ids байты файла уходят в id теста: PYTEST_CURRENT_TEST > 32767 на Windows
+def test_mineru_mode_office_goes_through_ingest(monkeypatch, tmp_path, name, data):
+    calls = _fake_mineru(monkeypatch, tmp_path, vlm="не должен понадобиться")
+    result = app._convert_uploaded_file(_FakeUpload(name, data), "1-3", ocr_mode="mineru", verify=True)
+    assert result["error"] is None and result["markdown"].strip()
+    assert result["route"] == "office" and result["page_range"] == "all"
+    assert result["report"]["provider"] == "markitdown"
+    assert result["report"]["verified"] is False               # verify не передан, не ValueError
+    assert list(result["report"]) == REPORT_KEYS                # те же десять ключей, что у PDF
+    assert calls == []                                          # провайдер не создавался
+
+
+@_offline
+def test_mineru_mode_text_pdf_stays_local(monkeypatch, tmp_path):
+    pdf = require_fixture("textpdf1.pdf").read_bytes()          # стр. 1-2: слой есть, таблиц нет (спека 09)
+    calls = _fake_mineru(monkeypatch, tmp_path, vlm="x")
+    result = app._convert_uploaded_file(_FakeUpload("т.pdf", pdf), "1-2", ocr_mode="mineru")
+    assert result["route"] == "text" and calls == []            # маршрут — по вырезке
+    assert result["report"]["provider"] == "markitdown"
+
+
+@_offline
+def test_mineru_mode_pptx_keeps_plain_markitdown(monkeypatch):
+    monkeypatch.setattr(app, "convert_with_markitdown", lambda path, page_range=None: "# Слайд")
+    result = app._convert_uploaded_file(_FakeUpload("през.pptx"), None, ocr_mode="mineru")
+    assert result["markdown"] == "# Слайд" and result["report"] is None and result["route"] is None
+
+
+@_offline
+def test_office_outside_mineru_mode_unchanged(monkeypatch):     # off: отчёта нет, как было
+    monkeypatch.setattr(app, "convert_with_markitdown", lambda path, page_range=None: "# Д")
+    result = app._convert_uploaded_file(_FakeUpload("д.docx"), None, ocr_mode="off")
+    assert result["report"] is None and result["route"] is None
+
+
+@_offline
+def test_result_keys_closed(monkeypatch, tmp_path):
+    _fake_mineru(monkeypatch, tmp_path, vlm="# Т")
+    ok = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None, ocr_mode="mineru")
+    broken = app._convert_uploaded_file(_FakeUpload("битый.pdf"), None, ocr_mode="mineru")
+    assert ok["error"] is None and broken["error"] and broken["route"] is None
+    for result in (ok, broken):                                 # и на успехе, и на ошибке
+        assert set(result) == RESULT_KEYS
+
+
+def test_app_no_longer_imports_run_pipeline():
+    assert not hasattr(app, "run_pipeline")

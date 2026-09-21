@@ -19,7 +19,7 @@ from file_converter import (
     parse_page_range,
 )
 from ocr.cache import LocalCache
-from ocr.cli import run_pipeline
+from ocr.ingest import detect_route, ingest  # ПРАВКА #85: UI зовёт единый вход, не run_pipeline
 from ocr.mineru_provider import MineruAuthError, MineruProvider
 from ocr.validate import ANNOTATION_PREFIX
 from ocr_auto_mode import pdf_pages_without_text_layer
@@ -248,6 +248,17 @@ _OCR_MODE_LABELS = {
     "mineru": "MinerU (облако)",
 }
 
+# ПРАВКА #85: в режиме mineru PDF/DOCX/XLSX идут через ocr.ingest.
+_INGEST_EXTS = ("pdf", "docx", "xlsx")      # ПРАВКА #85: что в режиме mineru идёт через ocr.ingest
+_MINERU_ROUTES = ("scan", "text_tables")    # маршруты, на которых есть облако и второй прогон
+
+_ROUTE_LABELS = {
+    "scan": "скан → MinerU (облако)",
+    "text_tables": "текстовый PDF с таблицами → MinerU (облако)",
+    "text": "текстовый PDF без таблиц → MarkItDown (без облака)",
+    "office": "DOCX/XLSX → MarkItDown (без облака)",
+}
+
 _MINERU_KEY_HINT = (
     "Проверьте MINERU_API_KEY: .streamlit/secrets.toml локально, Secrets на "
     "Streamlit Cloud или переменная окружения."
@@ -372,18 +383,27 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
     display_range = page_range or "all"
     ocr_status = None
     report = None
+    route = None        # ПРАВКА #85: маршрут ingest; None вне ветки mineru и при ранней ошибке
     tmp_path = _save_uploaded_to_temp(uploaded_file, ext)
     try:
-        if ext == "pdf" and ocr_mode == "mineru":
-            # ПРАВКА #73: весь тракт — в ocr.cli.run_pipeline, здесь только сборка входа.
-            pdf_bytes = _pdf_page_subset(uploaded_file.getvalue(), page_range)
+        if ocr_mode == "mineru" and ext in _INGEST_EXTS:
+            # ПРАВКА #73: весь тракт — в ocr/, здесь только сборка входа.
+            # ПРАВКА #85: вход — ocr.ingest.ingest (раньше run_pipeline и только PDF):
+            # DOCX/XLSX получают ту же проверку и report.json.
+            data = uploaded_file.getvalue()
+            if ext == "pdf":
+                data = _pdf_page_subset(data, page_range)
+            # ponytail: detect_route зовётся дважды (здесь и внутри ingest) — второй проход
+            # pdfplumber по страницам. Убирается только параметром route у ingest, а он заморожен спекой 09.
+            route = detect_route(data, uploaded_file.name)
             with tempfile.TemporaryDirectory() as work_dir:
-                markdown, report = run_pipeline(
-                    pdf_bytes, source_name=uploaded_file.name,
-                    work_dir=Path(work_dir), verify=verify, annotate=annotate,
+                # verify на text/office не передаётся: ingest бросил бы ValueError на пачке файлов;
+                # карточка результата пишет, что сверка не применялась.
+                markdown, report = ingest(
+                    data, source_name=uploaded_file.name, work_dir=Path(work_dir),
+                    verify=verify and route in _MINERU_ROUTES, annotate=annotate,
                     cache=LocalCache(_OCR_CACHE_ROOT),
-                    provider_factory=_mineru_provider_factory(
-                        _mineru_api_key(), status))
+                    provider_factory=_mineru_provider_factory(_mineru_api_key(), status))
         elif ext == "pdf":
             markdown, ocr_status = pdf_to_markdown_with_status(
                 uploaded_file.getvalue(), page_range=page_range, mode=ocr_mode)
@@ -397,6 +417,7 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
             "ocr_status": ocr_status,
             "markdown": markdown,
             "report": report,
+            "route": route,     # ПРАВКА #85
             "error": None,
         }
     except Exception as e:
@@ -411,6 +432,7 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
             "ocr_status": ocr_status,
             "markdown": "",
             "report": None,
+            "route": route,     # ПРАВКА #85
             "error": error,
         }
     finally:
@@ -640,7 +662,8 @@ def render_files_to_markdown_mode():
             "Без OCR: конвертация через MarkItDown. "
             "OCRmyPDF: OCR только для PDF без текстового слоя (нужны локальные "
             "Tesseract и Ghostscript). "
-            "MinerU: облачное распознавание PDF с отчётом о сомнительных местах."
+            # ПРАВКА #85: через тракт идут и DOCX/XLSX
+            "MinerU: распознавание и проверка PDF/DOCX/XLSX с отчётом о сомнительных местах."
         ),
     )
     verify = False
@@ -650,9 +673,11 @@ def render_files_to_markdown_mode():
     elif ocr_mode == "auto":
         st.caption("OCR auto включен: OCR применяется только к PDF-кандидатам.")
     else:
+        # ПРАВКА #85: в облако идут не все PDF, а DOCX/XLSX получают отчёт
         st.caption(
-            "MinerU: PDF уходят в облако mineru.net (до 200 МБ и 200 стр.), "
-            "остальные форматы конвертируются как обычно. При заданном диапазоне "
+            "В облако mineru.net уходят сканы и текстовые PDF с таблицами (до 200 МБ и 200 стр.). "
+            "Текстовые PDF без таблиц, DOCX и XLSX конвертируются локально, но проходят ту же "
+            "проверку и получают отчёт. PPTX — как обычно, без отчёта. При заданном диапазоне "
             "отправляются только выбранные страницы, и номера страниц в находках "
             "считаются от этой вырезки."
         )
@@ -784,19 +809,20 @@ def render_files_to_markdown_mode():
             for idx, uploaded_file in enumerate(uploaded_files):
                 key = range_keys[idx]
                 page_range = _normalize_page_range(st.session_state.get(key))
-                if ocr_mode == "mineru" and _file_ext(uploaded_file.name) == "pdf":
+                if ocr_mode == "mineru" and _file_ext(uploaded_file.name) in _INGEST_EXTS:
                     # ПРАВКА #73: минутное ожидание облака не должно выглядеть зависанием
-                    with st.status(f"MinerU: {uploaded_file.name}…") as status:
+                    # ПРАВКА #85: тот же статус для DOCX/XLSX, поэтому «OCR-тракт», не «MinerU»
+                    with st.status(f"OCR-тракт: {uploaded_file.name}…") as status:
                         result = _convert_uploaded_file(
                             uploaded_file, page_range, ocr_mode=ocr_mode,
                             verify=verify, annotate=annotate, status=status)
                         if result["error"]:
                             status.update(
-                                label=f"MinerU: {uploaded_file.name} — ошибка",
+                                label=f"OCR-тракт: {uploaded_file.name} — ошибка",
                                 state="error")
                         else:
                             status.update(
-                                label=f"MinerU: {uploaded_file.name} — готово",
+                                label=f"OCR-тракт: {uploaded_file.name} — готово",
                                 state="complete")
                 else:
                     with st.spinner(f"Конвертирую {uploaded_file.name}..."):
@@ -869,6 +895,13 @@ def render_files_to_markdown_mode():
             if len(markdown) > 5000:
                 st.caption(
                     f"Показаны первые 5000 символов из {len(markdown)}.")
+            # ПРАВКА #85: .get — в session_state могут лежать результаты без ключа route
+            route = result.get("route")
+            if route:
+                st.caption(f"Маршрут: {_ROUTE_LABELS[route]}")
+                if (st.session_state.get("files_to_md_mineru_verify")
+                        and route not in _MINERU_ROUTES):
+                    st.caption("Сверка вторым прогоном не применялась: файл не шёл через MinerU.")
             report = result.get("report")
             if report:
                 _render_ocr_report(report)

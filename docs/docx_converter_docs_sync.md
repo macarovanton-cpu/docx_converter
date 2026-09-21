@@ -488,4 +488,47 @@ PLACEHOLDER-ы MinerU 1 и 2 закрыты **в документах** по д�
 3. `docs/specs/ocr/02-mineru-provider.md`, блок кода «Интерфейсы (дословно)»: комментарий
    `# PLACEHOLDER: код «квота исчерпана» неизвестен` у `QUOTA_CODES` оставлен — он дословно повторяет код провайдера.
 
-**Снимок нумерации (2026-09-21).** В коде `#1…#24, #26…#84`. Следующий свободный номер — **#85**.
+### ПРАВКА #85
+
+UI на едином входе `ocr.ingest` (спека 12). `app.py`: в режиме `mineru` файлы с расширением из
+`_INGEST_EXTS = ("pdf", "docx", "xlsx")` идут через `ocr.ingest.ingest` вместо `ocr.cli.run_pipeline`.
+
+Схема вызова (`_convert_uploaded_file`, ветка `ocr_mode == "mineru" and ext in _INGEST_EXTS`):
+
+    uploaded_file.getvalue()
+      → _pdf_page_subset(data, page_range)            # только PDF
+      → route = detect_route(data, имя)               # по вырезке; второй раз — внутри ingest
+      → ingest(data, source_name=имя, work_dir=<tmp>,
+               verify=verify and route in ("scan", "text_tables"), annotate=annotate,
+               cache=LocalCache(_OCR_CACHE_ROOT),
+               provider_factory=_mineru_provider_factory(_mineru_api_key(), status))
+      → результат: прежние восемь ключей + "route" (строка из ROUTES либо None)
+
+Что изменилось для человека:
+
+1. DOCX/XLSX в режиме `mineru`: появляются находки и кнопка `report.json`; в облако они
+   по-прежнему **не уходят** (маршрут `office`, `provider = "markitdown"`).
+2. Текстовый PDF без таблиц в режиме `mineru` **перестаёт уходить в облако**: `detect_route`
+   даёт `text`, конвертирует MarkItDown. Раньше в MinerU шёл любой PDF. Это правило спеки 09,
+   UI его наследует, а не вводит своё.
+3. Маршрут считается **по вырезке страниц**, а не по исходному файлу: диапазон «1-2» из
+   смешанного PDF может дать `text`, хотя весь файл — `scan`. Это верно: в облако идёт вырезка.
+4. PPTX — как раньше: MarkItDown, без отчёта (`ingest` его не принимает).
+
+Галочка «Сверка вторым прогоном» на маршрутах `text`/`office` в `ingest` не передаётся (там это
+`ValueError`); в карточке результата стоит подпись «Сверка вторым прогоном не применялась: файл не шёл
+через MinerU.», `report["verified"]` — `False`. Маршрут показан строкой «Маршрут: …» (`_ROUTE_LABELS`).
+Статус прогресса переименован: «MinerU: имя…» → «OCR-тракт: имя…» — он теперь и у DOCX/XLSX.
+
+`run_pipeline` остаётся публичной (её зовут `ingest`, CLI-тесты и агент); `app.py` её больше не
+импортирует. **Неточность, оставленная осознанно:** докстринг `ocr.cli.run_pipeline` всё ещё говорит
+«UI этапа 8 зовёт ту же функцию» — `ocr/cli.py` вне «Трогать» спеки 12, правится отдельной правкой.
+
+Отклонение от буквы спеки 12: в `parametrize` теста `test_mineru_mode_office_goes_through_ingest`
+добавлены `ids=["docx", "xlsx"]` — без них байты файла попадают в id теста, и на Windows pytest падает
+на `PYTEST_CURRENT_TEST` длиннее 32767 символов.
+
+Не проверено: ручной прогон `streamlit run app.py` с тремя файлами (раздел «Руками» спеки 12) и замер
+двойного `detect_route` на большом PDF (PLACEHOLDER 1 спеки 12) — автономный прогон их не делал.
+
+**Снимок нумерации (2026-09-21).** В коде `#1…#24, #26…#85`. Следующий свободный номер — **#86**.
