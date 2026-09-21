@@ -80,8 +80,11 @@ def count_diffs(a: str, b: str) -> int:
     return sum(1 for tag, *_ in matcher.get_opcodes() if tag != "equal")
 
 
-def parse_errors(text: str) -> list[tuple[str, str, str]]:
-    r"""ПРАВКА #83: строки «страница | было | надо»; черта внутри поля — \|."""
+def parse_errors_numbered(text: str) -> list[tuple[int, tuple[str, str, str]]]:
+    r"""ПРАВКА #83: строки «страница | было | надо»; черта внутри поля — \|.
+
+    ПРАВКА #84: (номер строки файла, (страница, было, надо)) — номер как в редакторе.
+    """
     errors = []
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
@@ -89,16 +92,27 @@ def parse_errors(text: str) -> list[tuple[str, str, str]]:
         fields = [part.strip().replace("\\|", "|") for part in re.split(r"(?<!\\)\|", line)]
         if len(fields) != 3 or not fields[1]:
             raise ValueError(f"строка {number}: нужно «страница | было | надо» с непустым «было»: {line!r}")
-        errors.append(tuple(fields))
+        errors.append((number, tuple(fields)))
     return errors
 
 
-def apply_errors(md: str, errors: list[tuple[str, str, str]]) -> str:
-    """ПРАВКА #83: правки по порядку, каждая — ровно по одному вхождению, без догадок."""
-    for _page, was, need in errors:
+def parse_errors(text: str) -> list[tuple[str, str, str]]:
+    return [error for _, error in parse_errors_numbered(text)]
+
+
+def apply_errors(md: str, errors: list[tuple[str, str, str]], *,
+                 lines: "list[int] | None" = None) -> str:
+    """ПРАВКА #83: правки по порядку, каждая — ровно по одному вхождению, без догадок.
+
+    ПРАВКА #84: lines — номера строк errors.txt, попадают в текст ошибки.
+    """
+    if lines is not None and len(lines) != len(errors):
+        raise ValueError(f"lines: {len(lines)} номеров на {len(errors)} правок")
+    for index, (_page, was, need) in enumerate(errors):
         n = md.count(was)
         if n != 1:
-            raise ValueError(f"«{was}»: вхождений {n}, нужно ровно 1")
+            where = "" if lines is None else f"строка {lines[index]} errors.txt: "
+            raise ValueError(f"{where}«{was}»: вхождений {n}, нужно ровно 1")
         md = md.replace(was, need)
     return md
 
@@ -181,7 +195,12 @@ def write_goldens(outputs: dict, force: bool) -> None:
     built = {}
     for name, path in targets:          # сначала собрать всё, потом писать: отказ не оставляет половину
         errors = _require(FIXTURES / f"{Path(name).stem}.errors.txt")   # пустой список подтверждается файлом
-        built[path] = apply_errors(outputs[name][0], parse_errors(errors.read_text(encoding="utf-8")))
+        try:        # ПРАВКА #84: ошибка называет файл и номер строки
+            numbered = parse_errors_numbered(errors.read_text(encoding="utf-8"))
+            built[path] = apply_errors(outputs[name][0], [error for _, error in numbered],
+                                       lines=[number for number, _ in numbered])
+        except ValueError as exc:
+            raise ValueError(f"{errors.name}: {exc}") from exc
     for path, text in built.items():
         path.write_text(text, encoding="utf-8", newline="")
         print(path.name)

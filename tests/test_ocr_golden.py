@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ocr import board as board_module
-from ocr.board import BOARD, GOLDEN, THRESHOLDS, apply_errors, build_board, main, parse_errors
+from ocr.board import BOARD, GOLDEN, THRESHOLDS, apply_errors, build_board, main, parse_errors, parse_errors_numbered
 from ocr_fixtures import count_diffs, read_fixture, require_fixture
 
 # эталоны вне git — sha ловит тихую подмену
@@ -73,6 +73,25 @@ def test_parse_and_apply_refuse_to_guess():
     with pytest.raises(ValueError, match="вхождений 2"):        # неуникальна после предыдущей правки
         apply_errors("аб вб", [("1", "в", "а"), ("1", "аб", "х")])
 
+def test_apply_errors_names_the_line():
+    """ПРАВКА #84: номер строки errors.txt в ошибке; без lines — поведение прежнее."""
+    text = "# шапка\n\n3 | а | б\n4 | нет такого | в\n"
+    numbered = parse_errors_numbered(text)
+    assert numbered == [(3, ("3", "а", "б")), (4, ("4", "нет такого", "в"))]
+    assert parse_errors(text) == [error for _, error in numbered]           # обёртка, поведение прежнее
+
+    lines = [n for n, _ in numbered]
+    errors = [e for _, e in numbered]
+    with pytest.raises(ValueError, match=r"строка 4 errors\.txt.*вхождений 0"):
+        apply_errors("а", errors, lines=lines)
+    with pytest.raises(ValueError, match=r"строка 3 errors\.txt.*вхождений 2"):
+        apply_errors("а а", errors, lines=lines)
+    with pytest.raises(ValueError, match="lines"):
+        apply_errors("а", errors, lines=[3])                                  # длины не совпали
+    with pytest.raises(ValueError, match="вхождений 0") as info:
+        apply_errors("текст", [("1", "нет такого", "б")])                     # без lines — как было
+    assert "строка" not in str(info.value)
+
 
 def test_golden_flag_keeps_manual_work(tmp_path, monkeypatch, capsys):
     fixtures = tmp_path / "fx"
@@ -96,6 +115,20 @@ def test_golden_flag_keeps_manual_work(tmp_path, monkeypatch, capsys):
     assert "bakeoff2.golden.md" in capsys.readouterr().err
     assert main(["--golden", "--force"]) == 0
     assert (fixtures / "golden.md").read_bytes() == bakeoff_golden_before   # bakeoff неприкосновенен
+    # ПРАВКА #84: отказ называет файл и номер строки, эталоны остаются прежними
+    xlsx_errors = fixtures / "xlsx1.errors.txt"
+    xlsx_before = xlsx_errors.read_bytes()
+    text = xlsx_errors.read_text(encoding="utf-8")
+    text += "" if text.endswith("\n") else "\n"
+    xlsx_errors.write_text(text + "- | такого текста в черновике нет | x\n", encoding="utf-8")
+    capsys.readouterr()
+    assert main(["--golden", "--force"]) == 1
+    err = capsys.readouterr().err
+    assert "xlsx1.errors.txt" in err
+    assert f"строка {len(text.splitlines()) + 1}" in err
+    for stem, sha in GOLDEN_SHA256.items():                     # отказ не оставляет половину
+        assert hashlib.sha256((fixtures / f"{stem}.golden.md").read_bytes()).hexdigest() == sha
+    xlsx_errors.write_bytes(xlsx_before)
 
     (fixtures / "xlsx1.errors.txt").unlink()                    # пустой список подтверждается файлом
     assert main(["--golden", "--force"]) == 1

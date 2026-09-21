@@ -60,16 +60,16 @@ Push to `main` → Streamlit Cloud picks it up automatically. No CI step require
 
 Seven Python modules plus the `ocr/` package:
 
-- **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types.
-- **`convert.py`** — Core Markdown → DOCX engine (1316 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None)`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
+- **`app.py`** — Streamlit UI. Downloads the `.docx` template from Google Drive (via service account in `st.secrets`), calls `convert_md_to_docx`, and serves the result as a file download. Falls back to a `local_path` if Drive credentials are absent. `DOC_TYPES` dict at the top controls available document types. Second mode, «Файлы → Markdown»: `ocr_mode` is `off` (MarkItDown) / `auto` (OCRmyPDF) / `mineru`; MinerU goes through `ocr.cli.run_pipeline` (#73).
+- **`convert.py`** — Core Markdown → DOCX engine (1630 lines). Single public entry point: `convert_md_to_docx(md_text, output_filename, template_path=None, images=None, doc_style='pz')`. Parses MD into blocks split on `\n\n`, dispatches each block to a typed renderer, writes via `python-docx`.
 - **`file_converter.py`** — Reverse direction: DOCX / PDF / TXT → Markdown. Entry point: `convert_file_to_md(file_bytes, filename) → (md_text, images)`. Also hosts the `Файлы -> Markdown` MarkItDown layer (`convert_with_markitdown`) and PDF diagnostics (`analyze_pdf_pages`, via pypdf).
 - **`markdown_cleanup.py`** — Deterministic OCR Markdown cleanup (`cleanup_ocr_markdown`). Covered by tests but **not connected to the UI or conversion flow** — backend-only.
 - **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
 - **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Both runs are bounded: `OCR_TIMEOUT_SEC = 300` for ocrmypdf, `DEPENDENCY_TIMEOUT_SEC = 15` for `--version` probes. `TimeoutExpired` surfaces as a readable message, never a traceback (no manual `kill()` — `subprocess.run` already kills the child before raising). Also provides `check_ocr_dependencies`, which locates Ghostscript via `shutil.which` over platform candidates (`gswin64c` / `gswin32c` on Windows, `gs` elsewhere) — never a hardcoded name.
-- **`pdf_core.py`** — Provider-agnostic PDF → Markdown core. Public entry points: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider) -> str` and `pdf_to_markdown_with_status(...) -> (str, status_dict | None)` (the latter is what `app.py` uses — the UI shows `ocr_status`). Owns bytes→tempfile plumbing; no Streamlit, no caches. Defines the `OcrProvider` protocol (`ocr_pdf_to_markdown(pdf_bytes, page_range) -> str`) with one implementation, `OcrmypdfProvider`; `provider=None` routes through `ocr_auto_mode.convert_pdf_with_optional_ocr` unchanged. A second (cloud vision) provider is a planned separate PR.
+- **`pdf_core.py`** — Provider-agnostic PDF → Markdown core. Public entry points: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider) -> str` and `pdf_to_markdown_with_status(...) -> (str, status_dict | None)` (the latter is what `app.py` uses — the UI shows `ocr_status`). Owns bytes→tempfile plumbing; no Streamlit, no caches. Defines the `OcrProvider` protocol (`ocr_pdf(pdf_bytes, page_range) -> OcrResult`, #60) and the `PageInfo` / `OcrResult` dataclasses; two implementations — `OcrmypdfProvider` and `ocr.mineru_provider.MineruProvider`. `provider=None` routes through `ocr_auto_mode.convert_pdf_with_optional_ocr` unchanged.
 - **`ocr/`** — MinerU OCR pipeline (`ocr/__init__.py` holds the shared `Finding` dataclass and `SEVERITIES`). Eight modules:
   - **`ocr/mineru_provider.py`** (#61) — MinerU cloud API v4 behind the `pdf_core.OcrProvider` protocol: PDF → raw zip → `OcrResult`. `result_from_zip` unpacks a zip without touching the network — that is what the cache reuses.
-  - **`ocr/cache.py`** (#62) — raw provider response cache (zip + `meta.json`): `cache_key`, `build_meta`, `LocalCache`, `make_cache`. `make_cache("drive")` raises `NotImplementedError` until stage 8.
+  - **`ocr/cache.py`** (#62) — raw provider response cache (zip + `meta.json`): `cache_key`, `build_meta`, `LocalCache`, `make_cache`. `make_cache("drive")` raises `NotImplementedError` — не реализован (этап 8 прошёл без Drive-кэша).
   - **`ocr/postprocess.py`** (#63) — deterministic Markdown cleanup after OCR: HTML tables → pipe tables, page-split tables merged, homoglyphs, `No` → `№`; everything doubtful becomes a `Finding`, nothing is silently fixed.
   - **`ocr/validate.py`** (#64) — checks over the postprocessed Markdown (ИНН/ОГРН/КПП, ГОСТ, units, table totals) plus `build_report` (`report.json` schema v1), `annotate` and `strip_annotations`.
   - **`ocr/diff.py`** (#65) — word-level comparison of two runs (`vlm` vs `pipeline`); every divergence becomes a `low_confidence` finding. Text is never changed, no side is declared right.
@@ -77,7 +77,7 @@ Seven Python modules plus the `ocr/` package:
   - **`ocr/ingest.py`** (#81) — single entry for `.pdf` / `.docx` / `.xlsx`: `detect_route` (scan / text with tables / text / office), MinerU routes go to `run_pipeline` unchanged, MarkItDown routes go through the same `postprocess` + `validate` + `build_report`. `ocr.cli.main` calls `ingest`; `app.py` still calls `run_pipeline`.
   - **`ocr/board.py`** (#82) — `python -m ocr.board`: offline quality board over the six fixtures (findings by rule, table integrity, size; #83: `count_diffs` / `threshold` / `per_1000_tokens` against per-fixture goldens). `--golden` builds `<stem>.golden.md` = draft + closed edit list from `<stem>.errors.txt` (`parse_errors` / `apply_errors`). Never overwrites an existing `<stem>.errors.txt`; never touches bakeoff's `golden.md`.
 
-OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`).
+OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`). Mode `mineru` (PDF only): `_pdf_page_subset` (pypdf cuts the selected pages) → `ocr.cli.run_pipeline`.
 
 ## Brand constants (convert.py)
 
@@ -149,7 +149,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
@@ -178,6 +178,7 @@ Documented long-standing limits: column alignment from `:----` separators is not
 `--golden [--force]` собирает пять `<имя>.golden.md` из черновиков и `errors.txt` («было» — ровно одно
 вхождение, иначе ошибка); существующий эталон без `--force` — код `1`; `golden.md` бейкоффа не трогается
 никогда. Эталоны руками не правятся — только новой строкой в `errors.txt` + `--golden --force` + новые sha и порог.
+Ошибка `--golden` называет файл и номер строки `errors.txt` (ПРАВКА #84).
 Код `0` — табло построено, `1` — исключение; критичные находки кода не меняют.
 
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
@@ -208,7 +209,7 @@ Documented long-standing limits: column alignment from `:----` separators is not
 
 ## Known production limitation
 
-OCR `auto` is implemented and wired into the UI, but `ocrmypdf` is **not** in `requirements.txt` and there is no `packages.txt`. On Streamlit Community Cloud the system Tesseract/Ghostscript binaries are unavailable, so OCR `auto` currently fails in production. Open question, resolved by a separate packaging task — do not add `ocrmypdf` to `requirements.txt` or create `packages.txt` as part of unrelated work. Since #53 the Ghostscript check is at least honest on Linux: if `gs` is on PATH it reports `ok`, instead of always failing on the Windows-only `gswin64c`.
+OCR `auto` is implemented and wired into the UI, but `ocrmypdf` is **not** in `requirements.txt` and there is no `packages.txt`. On Streamlit Community Cloud the system Tesseract/Ghostscript binaries are unavailable, so `auto` is **not offered** there at all (`_ocr_mode_options`, #73); the working OCR path in production is MinerU. Packaging `ocrmypdf` stays a separate task — do not add `ocrmypdf` to `requirements.txt` or create `packages.txt` as part of unrelated work. Since #53 the Ghostscript check is at least honest on Linux: if `gs` is on PATH it reports `ok`, instead of always failing on the Windows-only `gswin64c`.
 
 ## Secrets
 
@@ -224,6 +225,8 @@ client_email = "..."
 ```
 
 Without this key, `use_drive` is `False` and the app falls back to the `local_path` in `DOC_TYPES`.
+
+`MINERU_API_KEY` — top-level key in the same `secrets.toml` (not inside a section) or an environment variable; `app.py` reads secrets first, then the environment (#73).
 
 ## Adding a document type
 
