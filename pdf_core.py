@@ -57,10 +57,12 @@ class VerifyResult:
     raw: str                     # сырой текст ответа модели
 
 
+# ПРАВКА #88: модель только переписывает вырезки; вердикт считает ocr.measure.judge по тексту тракта.
+# GeminiVerifier.verify (#86) в коде остаётся, но этому протоколу не соответствует: в замере не участвует.
 class Verifier(Protocol):
-    """Картинка вырезки + фрагмент + вопрос -> вердикт. Один фрагмент — один вызов."""
+    """Вырезки одной страницы + вопрос -> дословный текст каждой, в том же порядке ("" — текста нет)."""
 
-    def verify(self, image_png: bytes, fragment: str, question: str) -> VerifyResult: ...
+    def transcribe(self, images: list[bytes], question: str) -> list[str]: ...
 
 
 class OcrmypdfProvider:

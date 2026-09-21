@@ -33,6 +33,7 @@ These are the rules of engagement. Read them before touching code.
 - Do **not** propose a different stack (Pandoc, Quarto, mdbook). The stack is chosen and works.
 - Do **not** add dependencies to `requirements.txt` without explicit agreement — Streamlit Cloud does a cold build.
 - Do **not** silently swallow data. If a table row has extra cells, a URL is malformed, or an image fails to decode — surface it, do not drop it. Silent corruption in a client-facing КП is the worst failure mode this project has.
+- Вердикт по фрагменту у модели не спрашивать — только транскрипция вырезки, вердикт локально (замер #87).
 
 ## Running the app
 
@@ -76,8 +77,8 @@ Seven Python modules plus the `ocr/` package:
   - **`ocr/cli.py`** (#66) — `python -m ocr.cli`: `run_pipeline` wires the whole tract (cache → provider → postprocess → validate → optional diff → report), `main` writes `out.md` / `report.json` and prints one JSON line. Since #85 the UI no longer calls `run_pipeline` directly — it goes through `ocr.ingest.ingest`; `run_pipeline` stays public (`ingest`, tests, agents).
   - **`ocr/ingest.py`** (#81) — single entry for `.pdf` / `.docx` / `.xlsx`: `detect_route` (scan / text with tables / text / office), MinerU routes go to `run_pipeline` unchanged, MarkItDown routes go through the same `postprocess` + `validate` + `build_report`. `ocr.cli.main` and `app.py` (#85) both call `ingest`.
   - **`ocr/board.py`** (#82) — `python -m ocr.board`: offline quality board over the six fixtures (findings by rule, table integrity, size; #83: `count_diffs` / `threshold` / `per_1000_tokens` against per-fixture goldens). `--golden` builds `<stem>.golden.md` = draft + closed edit list from `<stem>.errors.txt` (`parse_errors` / `apply_errors`). Never overwrites an existing `<stem>.errors.txt`; never touches bakeoff's `golden.md`.
-  - **`ocr/gemini_verifier.py`** (#86) — `GeminiVerifier` behind the `pdf_core.Verifier` protocol (crop PNG + fragment + question → `agree` / `fix` / `unreadable`): REST via `requests`, no SDK; raw answers cached in `.cache/ocr/verify/`; network only with `GEMINI_LIVE=1` (cache miss without it is an error); `locate_block` / `crop_block` (bbox scale 0–1000, pdfplumber, 200 dpi). **Not wired into the tract.**
-  - **`ocr/measure.py`** (#87) — `python -m ocr.measure`: measures the verifier on the residual opcodes of the four PDF fixtures plus a same-size control sample. Measurement only; `ingest` / `validate` / `report.json` do not know about it.
+  - **`ocr/gemini_verifier.py`** (#86) — `GeminiVerifier` (crop PNG + fragment + question → `agree` / `fix` / `unreadable`; в замер не подключён с #88 — протокол `Verifier` стал транскрипцией): REST via `requests`, no SDK; raw answers cached in `.cache/ocr/verify/`; network only with `GEMINI_LIVE=1` (cache miss without it is an error); `locate_block` / `crop_block` (bbox scale 0–1000, pdfplumber, 200 dpi). **Not wired into the tract.**
+  - **`ocr/measure.py`** (#87, #88) — `python -m ocr.measure`: measures the verifier on the residual opcodes of the four PDF fixtures plus a same-size control sample. Since #88 the block crop is cut into overlapping horizontal tiles, the model only transcribes them (`pdf_core.Verifier.transcribe`, one call per page), and `judge` computes the verdict locally by `text_tokens` diff. Measurement only; `ingest` / `validate` / `report.json` do not know about it.
 
 OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`). Mode `mineru` (PDF / DOCX / XLSX, #85): `_pdf_page_subset` (pypdf cuts the selected pages, PDF only) → `ocr.ingest.detect_route` on the cut → `ocr.ingest.ingest`; `verify` is passed only on MinerU routes (`scan`, `text_tables`).
 
@@ -151,7 +152,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 и #85 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`, #86 — `pdf_core.py` + `ocr/gemini_verifier.py`, #87 — `ocr/measure.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 и #85 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`, #86 — `pdf_core.py` + `ocr/gemini_verifier.py`, #87 — `ocr/measure.py`, #88 — `ocr/measure.py` + `pdf_core.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
@@ -183,12 +184,15 @@ Documented long-standing limits: column alignment from `:----` separators is not
 Ошибка `--golden` называет файл и номер строки `errors.txt` (ПРАВКА #84).
 Код `0` — табло построено, `1` — исключение; критичные находки кода не меняют.
 
-**Замер vision-сверки (ПРАВКА #87):** `python -X utf8 -m ocr.measure` — по каждому опкоду остатка четырёх PDF-фикстур
-(один опкод — один запрос) вырезка + фрагмент → Gemini; исходы `found` / `not_found` / `wrong_fix`, на контрольной
-выборке — `false_alarm`. Пишет `_test/verify_measure.json` и вырезки `_test/verify_crops/`. Флагов нет; модель —
-константа `GEMINI_MODEL`. Без `GEMINI_LIVE=1` — только по кэшу `.cache/ocr/verify/`, промах — стоп с кодом `1`
-(квота и ключ не тратятся). Код `0` — замер полный, `1` — исключение или `complete == false` (повтор доберёт из кэша).
-В pytest — только фейковый `Verifier`, живого теста Gemini нет.
+**Замер vision-сверки (ПРАВКА #87, #88):** `python -X utf8 -m ocr.measure` — опкоды остатка четырёх PDF-фикстур плюс
+контрольная выборка. Вырезка блока режется на полосы (`TILE_HEIGHT` 700 / `TILE_OVERLAP` 200 px, оттенки серого) —
+`_test/verify_crops/<stem>/pNN-MM.png`, пишутся **до** обращения к модели. Модель только переписывает полосы страницы
+(одна страница — один вызов, нашего текста не видит); `judge` сравнивает транскрипцию с фрагментом по `text_tokens` в
+лучшем окне: `found` / `neighbor` / `not_found` / `wrong_fix`, на контроле — `agree` / `false_alarm` / `unreadable`;
+разбивка по видам `merge` / `homoglyph` / `chars`. Пишет `_test/verify_measure.<бэкенд>.<модель>.json` и
+`_test/verify_review.<бэкенд>.<модель>.md` (ложные тревоги, `wrong_fix`, `neighbor` — с полосой, для сверки человеком).
+После #88 бэкенда транскрипции нет: команда пишет полосы и выходит с кодом `1`. Код `0` — замер полный, `1` —
+исключение или `complete == false` (повтор доберёт из кэша). В pytest — только фейковый `Verifier`.
 
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
 Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
