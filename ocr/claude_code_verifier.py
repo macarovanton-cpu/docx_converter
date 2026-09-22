@@ -16,7 +16,9 @@ from ocr.gemini_verifier import (CACHE_ROOT, VerifierAuthError, VerifierConfigEr
 
 CLAUDE_MODEL = "claude-sonnet-5"         # полное имя, не алиас: ключ кэша не должен уехать вместе с алиасом
 CLAUDE_TIMEOUT_SEC = 600                 # PLACEHOLDER: на один вызов (страница, до 6 полос)
-SYSTEM_PROMPT = "You transcribe document images verbatim. Follow the user instructions exactly."
+# ПРАВКА #90: модель дописывала после JSON исправленную копию; просим ровно один объект (в ключ кэша не входит)
+SYSTEM_PROMPT = ("You transcribe document images verbatim. Follow the user instructions exactly. "
+                 "Reply with exactly one JSON object and nothing after it.")
 FILES_HEADER = "Картинки (прочитай каждую инструментом чтения файлов; ключ ответа — имя файла):"
 STRIPPED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")        # только авторизация подписки Claude Code
 AUTH_MARKERS = ("/login", "not logged in", "invalid api key")       # PLACEHOLDER: по живому выводу
@@ -66,14 +68,23 @@ def parse_cli_output(stdout: str, stderr: str, model: str) -> dict:
 
 
 def parse_texts(raw: str, names: list[str]) -> dict[str, str]:
-    try:    # срез от { до } снимает обёртку ```json и даёт dict или ошибку разбора
-        answer = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
-    except ValueError as exc:
-        raise VerifierError(f"ответ модели не JSON ({exc}): {raw[:200]!r}") from exc
-    texts = {key.replace("\\", "/").rsplit("/", 1)[-1]: value for key, value in answer.items()}  # полный путь -> имя
-    if sorted(texts) != sorted(names) or len(texts) != len(answer) or not all(isinstance(v, str) for v in texts.values()):
-        raise VerifierError(f"ответ не по файлам: ждали {names}, пришло {list(answer)}: {raw[:200]!r}")
-    return texts
+    """ПРАВКА #90: ответ — последний JSON-объект с ключами ровно по names (модель дописывает исправленную копию)."""
+    decoder, objects, i = json.JSONDecoder(), [], raw.find("{")
+    while i != -1:          # с { декодируется только объект; обёртка ```json пропускается сама
+        try:
+            obj, end = decoder.raw_decode(raw, i)
+        except ValueError:
+            i = raw.find("{", i + 1)
+            continue
+        objects.append(obj)
+        i = raw.find("{", end)
+    if not objects:
+        raise VerifierError(f"ответ модели не JSON: {raw[:200]!r}")
+    for obj in reversed(objects):
+        texts = {key.replace("\\", "/").rsplit("/", 1)[-1]: value for key, value in obj.items()}  # полный путь -> имя
+        if sorted(texts) == sorted(names) and len(texts) == len(obj) and all(isinstance(v, str) for v in texts.values()):
+            return texts
+    raise VerifierError(f"ответ не по файлам: ждали {names}, пришло {list(objects[-1])}: {raw[:200]!r}")
 
 
 class ClaudeCodeVerifier:

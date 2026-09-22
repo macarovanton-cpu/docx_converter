@@ -101,6 +101,16 @@ def test_parse_texts():
                 '{"01.png": "а", "C:\\\\x\\\\01.png": "б"}', "нет json", '["01.png", "02.png"]'):
         with pytest.raises(VerifierError):
             parse_texts(bad, names)
+    # ПРАВКА #90: модель дописывает после JSON исправленную копию — берётся последний подходящий объект
+    two = ('{"01.png": "утрежденные", "02.png": "б"}\n\nОдна оговорка: в 01.png я написал «утрежденные».\n\n'
+           '{"01.png": "утвержденные", "02.png": "б"}')
+    assert parse_texts(two, names) == {"01.png": "утвержденные", "02.png": "б"}           # последний, а не срез {…}
+    assert parse_texts('{"01.png": "а", "02.png": "б"} и ещё {"03.png": "в"}', names) == {"01.png": "а", "02.png": "б"}
+    assert parse_texts('{"01.png": "a {b} c", "02.png": ""}', names) == {"01.png": "a {b} c", "02.png": ""}
+    with pytest.raises(VerifierError, match="ответ модели не JSON"):
+        parse_texts("нет json", names)
+    with pytest.raises(VerifierError, match="ответ не по файлам"):
+        parse_texts('{"01.png": "а"} {"02.png": "б"}', names)
 
 
 def test_find_claude(monkeypatch):

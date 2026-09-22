@@ -34,6 +34,7 @@ These are the rules of engagement. Read them before touching code.
 - Do **not** add dependencies to `requirements.txt` without explicit agreement — Streamlit Cloud does a cold build.
 - Do **not** silently swallow data. If a table row has extra cells, a URL is malformed, or an image fails to decode — surface it, do not drop it. Silent corruption in a client-facing КП is the worst failure mode this project has.
 - Вердикт по фрагменту у модели не спрашивать — только транскрипция вырезки, вердикт локально (замер #87).
+- MinerU склеивает межстраничную таблицу в блок первой страницы (продолжения — с пустым `table_body`): страницу фрагмента брать из `*_model.json`, а не из `content_list` (замер #89).
 
 ## Running the app
 
@@ -78,8 +79,8 @@ Seven Python modules plus the `ocr/` package:
   - **`ocr/ingest.py`** (#81) — single entry for `.pdf` / `.docx` / `.xlsx`: `detect_route` (scan / text with tables / text / office), MinerU routes go to `run_pipeline` unchanged, MarkItDown routes go through the same `postprocess` + `validate` + `build_report`. `ocr.cli.main` and `app.py` (#85) both call `ingest`.
   - **`ocr/board.py`** (#82) — `python -m ocr.board`: offline quality board over the six fixtures (findings by rule, table integrity, size; #83: `count_diffs` / `threshold` / `per_1000_tokens` against per-fixture goldens). `--golden` builds `<stem>.golden.md` = draft + closed edit list from `<stem>.errors.txt` (`parse_errors` / `apply_errors`). Never overwrites an existing `<stem>.errors.txt`; never touches bakeoff's `golden.md`.
   - **`ocr/gemini_verifier.py`** (#86) — `GeminiVerifier` (crop PNG + fragment + question → `agree` / `fix` / `unreadable`; в замер не подключён с #88 — протокол `Verifier` стал транскрипцией): REST via `requests`, no SDK; raw answers cached in `.cache/ocr/verify/`; network only with `GEMINI_LIVE=1` (cache miss without it is an error); `locate_block` / `crop_block` (bbox scale 0–1000, pdfplumber, 200 dpi). **Not wired into the tract.**
-  - **`ocr/measure.py`** (#87, #88) — `python -m ocr.measure`: measures the verifier on the residual opcodes of the four PDF fixtures plus a same-size control sample. Since #88 the block crop is cut into overlapping horizontal tiles, the model only transcribes them (`pdf_core.Verifier.transcribe`, one call per page), and `judge` computes the verdict locally by `text_tokens` diff. Measurement only; `ingest` / `validate` / `report.json` do not know about it.
-  - **`ocr/claude_code_verifier.py`** (#89) — `ClaudeCodeVerifier` behind `pdf_core.Verifier`: one `claude -p` subprocess per page (`--output-format json --tools Read --permission-mode dontAsk --safe-mode --no-session-persistence --system-prompt …`), images in an empty temp dir outside the repo, prompt via stdin, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` stripped from the child env — subscription login of the local Claude Code only; no keys, tokens or HTTP in our code. Per-tile cache in `.cache/ocr/verify/` (model in the key as `claude-code:<model>`); `claude` runs only with `CLAUDE_CODE_LIVE=1`. Local only.
+  - **`ocr/measure.py`** (#87, #88, #90) — `python -m ocr.measure`: measures the verifier on the residual opcodes of the four PDF fixtures plus a same-size control sample. Since #88 the block crop is cut into overlapping horizontal tiles, the model only transcribes them (`pdf_core.Verifier.transcribe`, one call per page), and `judge` computes the verdict locally by `text_tokens` diff. Since #90 the page of a case is the **physical** one, taken from `*_model.json` (MinerU glues a cross-page table into the first page's block), and a window crossing a page seam is judged on two tiles. Measurement only; `ingest` / `validate` / `report.json` do not know about it.
+  - **`ocr/claude_code_verifier.py`** (#89) — `ClaudeCodeVerifier` behind `pdf_core.Verifier`: one `claude -p` subprocess per page (`--output-format json --tools Read --permission-mode dontAsk --safe-mode --no-session-persistence --system-prompt …`), images in an empty temp dir outside the repo, prompt via stdin, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` stripped from the child env — subscription login of the local Claude Code only; no keys, tokens or HTTP in our code. Per-tile cache in `.cache/ocr/verify/` (model in the key as `claude-code:<model>`); `claude` runs only with `CLAUDE_CODE_LIVE=1`. `parse_texts` (#90) — the **last** JSON object whose keys are exactly the batch files (the model appends a corrected copy after the first one); parsing happens on every read of a cached record, so a parser fix costs nothing. Local only.
 
 OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`). Mode `mineru` (PDF / DOCX / XLSX, #85): `_pdf_page_subset` (pypdf cuts the selected pages, PDF only) → `ocr.ingest.detect_route` on the cut → `ocr.ingest.ingest`; `verify` is passed only on MinerU routes (`scan`, `text_tables`).
 
@@ -153,7 +154,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 и #85 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`, #86 — `pdf_core.py` + `ocr/gemini_verifier.py`, #87 — `ocr/measure.py`, #88 — `ocr/measure.py` + `pdf_core.py`, #89 — `ocr/claude_code_verifier.py` + `ocr/measure.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 и #85 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`, #86 — `pdf_core.py` + `ocr/gemini_verifier.py`, #87 — `ocr/measure.py`, #88 — `ocr/measure.py` + `pdf_core.py`, #89 — `ocr/claude_code_verifier.py` + `ocr/measure.py`, #90 — `ocr/measure.py` + `ocr/claude_code_verifier.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
@@ -185,18 +186,24 @@ Documented long-standing limits: column alignment from `:----` separators is not
 Ошибка `--golden` называет файл и номер строки `errors.txt` (ПРАВКА #84).
 Код `0` — табло построено, `1` — исключение; критичные находки кода не меняют.
 
-**Замер vision-сверки (ПРАВКА #87–#89):** `python -X utf8 -m ocr.measure [--verifier claude-code|gemini] [--model ИМЯ]
+**Замер vision-сверки (ПРАВКА #87–#90):** `python -X utf8 -m ocr.measure [--verifier claude-code|gemini] [--model ИМЯ]
 [--fixture ФАЙЛ]...` — опкоды остатка четырёх PDF-фикстур плюс контрольная выборка. Вырезка блока режется на полосы (`TILE_HEIGHT` 700 / `TILE_OVERLAP` 200 px, оттенки серого) —
 `_test/verify_crops/<stem>/pNN-MM.png`, пишутся **до** обращения к модели. Модель только переписывает полосы страницы
 (одна страница — один вызов, нашего текста не видит); `judge` сравнивает транскрипцию с фрагментом по `text_tokens` в
 лучшем окне: `found` / `neighbor` / `not_found` / `wrong_fix`, на контроле — `agree` / `false_alarm` / `unreadable`;
-разбивка по видам `merge` / `homoglyph` / `chars`. Пишет `_test/verify_measure.<бэкенд>.<модель>.json` и
-`_test/verify_review.<бэкенд>.<модель>.md` (ложные тревоги, `wrong_fix`, `neighbor` — с полосой, для сверки человеком).
+разбивка по видам `merge` / `homoglyph` / `chars`. Страница случая — физическая, из `*_model.json` того же zip
+(MinerU склеивает межстраничную таблицу в блок первой страницы; `bbox` берётся из блока-продолжения `content_list`,
+поэтому полосы и ключи кэша не меняются, #90). Окно, переходящее через стык страниц, судится по двум полосам —
+последней полосе страницы N и первой полосе N+1. Окно шире текстового блока — служебный исход `narrow` (в `measured`
+не входит). Пишет `_test/verify_measure.v3.<бэкенд>.<модель>.json` и `_test/verify_review.v3.<бэкенд>.<модель>.md`
+(ложные тревоги, `wrong_fix`, `neighbor` — с полосой, для сверки человеком).
 Бэкенд — `--verifier` (по умолчанию `VERIFIER`, иначе `claude-code`): Claude Code, модель `claude-sonnet-5` (полное
 имя, не алиас); `gemini` — код `1` (транскрипции нет). `--fixture` (повторяемый) оставляет случаи этих фикстур, имя
-файлов получает суффикс `.<stem>+<stem>`. Без `CLAUDE_CODE_LIVE=1` — только по кэшу, промах — стоп с кодом `1`;
-лимит подписки / нет входа / нет бинаря — тоже стоп, повтор доберёт с места остановки. Код `0` — замер полный, `1` —
-исключение или `complete == false`. В pytest — только фейковый `Verifier` и фейковый `subprocess.run`.
+файлов получает суффикс `.<stem>+<stem>`. Без `CLAUDE_CODE_LIVE=1` — только по кэшу; промах кэша замер **не
+останавливает** (#90): оплаченные страницы пересуживаются бесплатно, недостающие идут в `missing_pages` и в stderr,
+код `1`. Лимит подписки / нет входа / нет бинаря — стоп, повтор доберёт с места остановки. Причины сбоев страниц —
+в `totals.error_reasons`. Код `0` — замер полный, `1` — исключение или `complete == false`. В pytest — только
+фейковый `Verifier` и фейковый `subprocess.run`.
 
 **Нужно:** переменная окружения `MINERU_API_KEY` (для `--engine mineru`). PDF до 200 МБ и 200 страниц.
 Документ уходит в облако mineru.net; повторный прогон того же файла берётся из `.cache/ocr/`.
