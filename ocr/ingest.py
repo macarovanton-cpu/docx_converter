@@ -1,4 +1,5 @@
-"""ПРАВКА #81: единый вход тракта: PDF/DOCX/XLSX -> (markdown, report)."""
+"""ПРАВКА #81: единый вход тракта: PDF/DOCX/XLSX -> (markdown, report).
+ПРАВКА #91: vision — сверка по картинке (ocr.vision) на маршрутах MinerU."""
 
 import hashlib
 import os
@@ -6,7 +7,8 @@ import tempfile
 from pathlib import Path
 
 from file_converter import analyze_pdf_pages, convert_with_markitdown
-from ocr.cache import CacheBackend
+from ocr import Finding
+from ocr.cache import CacheBackend, cache_key
 from ocr.cli import run_pipeline
 from ocr.postprocess import postprocess
 from ocr.validate import annotate as annotate_md
@@ -17,6 +19,7 @@ from pdf_core import pdf_to_markdown_with_status
 ROUTES = ("scan", "text_tables", "text", "office")
 OFFICE_EXTS = (".docx", ".xlsx")
 MIN_TABLE_ROWS, MIN_TABLE_COLS = 2, 2       # PLACEHOLDER: пороги стартовые, на одной фикстуре
+FINDING_FIELDS = ("rule", "severity", "page", "snippet", "suggestion", "reading", "model")   # ПРАВКА #91
 
 
 def _write_temp(data: bytes, suffix: str) -> str:
@@ -65,18 +68,46 @@ def ingest(data: bytes, *, source_name: str, work_dir: Path,
            verify: bool = False, annotate: bool = False,
            annotate_all: bool = False,
            cache: "CacheBackend | None" = None,
-           provider_factory=None) -> tuple[str, dict]:
+           provider_factory=None,
+           vision: str | None = None,          # ПРАВКА #91: модель сверки по картинке; None — сверки нет
+           vision_progress=None) -> tuple[str, dict]:   # ПРАВКА #91: (page, done, total) перед каждой страницей
     """Какой бы конвертер ни отработал — postprocess + validate + тот же report.json."""
     pipeline = dict(source_name=source_name, work_dir=work_dir, engine=engine, mode=mode,
                     verify=verify, annotate=annotate, annotate_all=annotate_all,
                     cache=cache, provider_factory=provider_factory)
     ext = Path(source_name).suffix.lower()
     if engine == "ocrmypdf" and ext == ".pdf":
+        if vision is not None:                    # ПРАВКА #91
+            raise ValueError("сверка по картинке доступна только для маршрутов MinerU")
         return run_pipeline(data, **pipeline)     # явный выбор человека: без детектора
     route = detect_route(data, source_name)
     if route in ("scan", "text_tables"):
         # один вызов на оба маршрута: is_ocr провайдер считает сам по текстовому слою
-        return run_pipeline(data, **pipeline)
+        if vision is None:
+            return run_pipeline(data, **pipeline)
+        if cache is None:                         # ПРАВКА #91: CLI и UI кэш передают всегда
+            raise ValueError("сверке по картинке нужен кэш: сырой ответ MinerU берётся из него")
+        # ПРАВКА #91: тракт без пометок, сверка по картинке, отчёт пересобирается, пометки — в конце
+        from ocr.vision import skipped_finding, vision_findings   # здесь: ocr.vision тянет ocr.board -> ocr.ingest
+
+        md, report = run_pipeline(data, **{**pipeline, "annotate": False, "annotate_all": False})
+        cached = cache.get(cache_key(data, "mineru", mode))
+        if cached is None:          # после run_pipeline запись есть всегда
+            extra = [skipped_finding(None, "сверка не выполнена: сырого ответа MinerU нет в кэше", vision)]
+        else:
+            extra = vision_findings(md, data, cached[0], source_name=source_name, model=vision,
+                                    progress=vision_progress)
+        # content_list не передаётся: страницы у прежних находок уже проставлены
+        report = build_report(source=report["source"], sha256=report["sha256"], provider=report["provider"],
+                              model_version=report["model_version"], cache_hit=report["cache_hit"],
+                              verified=report["verified"],
+                              findings=[Finding(**{k: f[k] for k in FINDING_FIELDS}) for f in report["findings"]]
+                              + extra)
+        if annotate or annotate_all:
+            md = annotate_md(md, report, include_low_confidence=annotate_all)
+        return md, report
+    if vision is not None:                        # ПРАВКА #91: как --verify, до конвертации
+        raise ValueError("сверка по картинке доступна только для маршрутов MinerU")
     if verify:
         raise ValueError("--verify доступен только для маршрутов MinerU")
 
@@ -97,3 +128,4 @@ def ingest(data: bytes, *, source_name: str, work_dir: Path,
     if annotate or annotate_all:                  # как в run_pipeline (ПРАВКА #70)
         md = annotate_md(md, report, include_low_confidence=annotate_all)
     return md, report
+

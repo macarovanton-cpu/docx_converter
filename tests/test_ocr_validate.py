@@ -53,10 +53,10 @@ def test_report_schema():
     assert list(report) == ["schema_version", "source", "sha256", "provider",
                             "model_version", "cache_hit", "verified", "created_at",
                             "summary", "findings"]
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2                       # ПРАВКА #91
     assert [f["id"] for f in report["findings"]] == list(range(1, len(findings) + 1))
-    assert all(list(f) == ["id", "rule", "severity", "page", "snippet", "suggestion"]
-               for f in report["findings"])
+    assert all(list(f) == ["id", "rule", "severity", "page", "snippet", "suggestion", "reading", "model"]
+               for f in report["findings"])                    # ПРАВКА #91: восемь ключей
     assert report["summary"]["critical"] == 5                  # пять ФИО с латиницей
     assert sum(report["summary"].values()) == len(report["findings"])
     assert set(report["summary"]) == {"critical", "warning", "info"}

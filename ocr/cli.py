@@ -107,6 +107,8 @@ def run_pipeline(pdf_bytes: bytes, *, source_name: str, work_dir: Path,
 
 
 def _parse_args(argv: "list[str] | None") -> argparse.Namespace:
+    from ocr.vision import VISION_MODEL      # ПРАВКА #91: здесь — ocr.vision тянет ocr.board -> ocr.ingest -> ocr.cli
+
     parser = _Parser(
         prog="python -m ocr.cli",
         description="Тендерный PDF -> Markdown со структурой + отчёт о сомнительных местах.")
@@ -124,6 +126,11 @@ def _parse_args(argv: "list[str] | None") -> argparse.Namespace:
                         help="то же, но вместе с low_confidence (их десятки)")
     parser.add_argument("--cache", default="local", choices=("local", "drive"),
                         help="бэкенд кэша сырого ответа (по умолчанию local)")
+    # ПРАВКА #91: сверка по картинке
+    parser.add_argument("--vision", nargs="?", const=VISION_MODEL, default=None, metavar="МОДЕЛЬ",
+                        help="сверка по картинке через Claude Code (claude -p; только локально, где claude "
+                             "установлен и залогинен). Без значения — claude-opus-5; подсказки -> находки "
+                             "vision_diff, текст не меняется")
     return parser.parse_args(argv)
 
 
@@ -146,7 +153,10 @@ def main(argv: "list[str] | None" = None, *, provider_factory=None) -> int:
                             mode=args.mode, verify=args.verify,
                             annotate=args.annotate,
                             annotate_all=args.annotate_all, cache=cache,
-                            provider_factory=provider_factory)
+                            provider_factory=provider_factory,
+                            vision=args.vision,          # ПРАВКА #91
+                            vision_progress=lambda page, done, total: print(
+                                f"сверка по картинке: стр. {page} ({done} из {total})", file=sys.stderr))
         # пишем только после успешного тракта: недописанный out.md хуже отсутствующего
         out_dir.mkdir(parents=True, exist_ok=True)
         out_md, report_path = out_dir / "out.md", out_dir / "report.json"

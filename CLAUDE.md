@@ -35,6 +35,7 @@ These are the rules of engagement. Read them before touching code.
 - Do **not** silently swallow data. If a table row has extra cells, a URL is malformed, or an image fails to decode — surface it, do not drop it. Silent corruption in a client-facing КП is the worst failure mode this project has.
 - Вердикт по фрагменту у модели не спрашивать — только транскрипция вырезки, вердикт локально (замер #87).
 - MinerU склеивает межстраничную таблицу в блок первой страницы (продолжения — с пустым `table_body`): страницу фрагмента брать из `*_model.json`, а не из `content_list` (замер #89).
+- Подсказка сверки по картинке текст не меняет: только находка `vision_diff`; гомоглифы и пунктуацию по скану не подсказывать (#91).
 
 ## Running the app
 
@@ -69,11 +70,11 @@ Seven Python modules plus the `ocr/` package:
 - **`ocr_auto_mode.py`** — «OCR or not» orchestrator (`convert_pdf_with_optional_ocr`). Decides whether a PDF needs OCR, honoring the selected page range.
 - **`ocr_converter.py`** — OCRmyPDF wrapper via `subprocess`. Both runs are bounded: `OCR_TIMEOUT_SEC = 300` for ocrmypdf, `DEPENDENCY_TIMEOUT_SEC = 15` for `--version` probes. `TimeoutExpired` surfaces as a readable message, never a traceback (no manual `kill()` — `subprocess.run` already kills the child before raising). Also provides `check_ocr_dependencies`, which locates Ghostscript via `shutil.which` over platform candidates (`gswin64c` / `gswin32c` on Windows, `gs` elsewhere) — never a hardcoded name.
 - **`pdf_core.py`** — Provider-agnostic PDF → Markdown core. Public entry points: `pdf_to_markdown(pdf_bytes, *, page_range, mode, provider) -> str` and `pdf_to_markdown_with_status(...) -> (str, status_dict | None)` (the latter is what `app.py` uses — the UI shows `ocr_status`). Owns bytes→tempfile plumbing; no Streamlit, no caches. Defines the `OcrProvider` protocol (`ocr_pdf(pdf_bytes, page_range) -> OcrResult`, #60) and the `PageInfo` / `OcrResult` dataclasses; two implementations — `OcrmypdfProvider` and `ocr.mineru_provider.MineruProvider`. `provider=None` routes through `ocr_auto_mode.convert_pdf_with_optional_ocr` unchanged.
-- **`ocr/`** — MinerU OCR pipeline (`ocr/__init__.py` holds the shared `Finding` dataclass and `SEVERITIES`). Eleven modules:
+- **`ocr/`** — MinerU OCR pipeline (`ocr/__init__.py` holds the shared `Finding` dataclass and `SEVERITIES`). Twelve modules:
   - **`ocr/mineru_provider.py`** (#61) — MinerU cloud API v4 behind the `pdf_core.OcrProvider` protocol: PDF → raw zip → `OcrResult`. `result_from_zip` unpacks a zip without touching the network — that is what the cache reuses.
   - **`ocr/cache.py`** (#62) — raw provider response cache (zip + `meta.json`): `cache_key`, `build_meta`, `LocalCache`, `make_cache`. `make_cache("drive")` raises `NotImplementedError` — не реализован (этап 8 прошёл без Drive-кэша).
   - **`ocr/postprocess.py`** (#63) — deterministic Markdown cleanup after OCR: HTML tables → pipe tables, page-split tables merged, homoglyphs, `No` → `№`; everything doubtful becomes a `Finding`, nothing is silently fixed.
-  - **`ocr/validate.py`** (#64) — checks over the postprocessed Markdown (ИНН/ОГРН/КПП, ГОСТ, units, table totals) plus `build_report` (`report.json` schema v1), `annotate` and `strip_annotations`.
+  - **`ocr/validate.py`** (#64) — checks over the postprocessed Markdown (ИНН/ОГРН/КПП, ГОСТ, units, table totals) plus `build_report` (`report.json` schema v2 since #91), `annotate` and `strip_annotations`.
   - **`ocr/diff.py`** (#65) — word-level comparison of two runs (`vlm` vs `pipeline`); every divergence becomes a `low_confidence` finding. Text is never changed, no side is declared right.
   - **`ocr/cli.py`** (#66) — `python -m ocr.cli`: `run_pipeline` wires the whole tract (cache → provider → postprocess → validate → optional diff → report), `main` writes `out.md` / `report.json` and prints one JSON line. Since #85 the UI no longer calls `run_pipeline` directly — it goes through `ocr.ingest.ingest`; `run_pipeline` stays public (`ingest`, tests, agents).
   - **`ocr/ingest.py`** (#81) — single entry for `.pdf` / `.docx` / `.xlsx`: `detect_route` (scan / text with tables / text / office), MinerU routes go to `run_pipeline` unchanged, MarkItDown routes go through the same `postprocess` + `validate` + `build_report`. `ocr.cli.main` and `app.py` (#85) both call `ingest`.
@@ -81,6 +82,7 @@ Seven Python modules plus the `ocr/` package:
   - **`ocr/gemini_verifier.py`** (#86) — `GeminiVerifier` (crop PNG + fragment + question → `agree` / `fix` / `unreadable`; в замер не подключён с #88 — протокол `Verifier` стал транскрипцией): REST via `requests`, no SDK; raw answers cached in `.cache/ocr/verify/`; network only with `GEMINI_LIVE=1` (cache miss without it is an error); `locate_block` / `crop_block` (bbox scale 0–1000, pdfplumber, 200 dpi). **Not wired into the tract.**
   - **`ocr/measure.py`** (#87, #88, #90) — `python -m ocr.measure`: measures the verifier on the residual opcodes of the four PDF fixtures plus a same-size control sample. Since #88 the block crop is cut into overlapping horizontal tiles, the model only transcribes them (`pdf_core.Verifier.transcribe`, one call per page), and `judge` computes the verdict locally by `text_tokens` diff. Since #90 the page of a case is the **physical** one, taken from `*_model.json` (MinerU glues a cross-page table into the first page's block), and a window crossing a page seam is judged on two tiles. Measurement only; `ingest` / `validate` / `report.json` do not know about it.
   - **`ocr/claude_code_verifier.py`** (#89) — `ClaudeCodeVerifier` behind `pdf_core.Verifier`: one `claude -p` subprocess per page (`--output-format json --tools Read --permission-mode dontAsk --safe-mode --no-session-persistence --system-prompt …`), images in an empty temp dir outside the repo, prompt via stdin, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` stripped from the child env — subscription login of the local Claude Code only; no keys, tokens or HTTP in our code. Per-tile cache in `.cache/ocr/verify/` (model in the key as `claude-code:<model>`); `claude` runs only with `CLAUDE_CODE_LIVE=1`. `parse_texts` (#90) — the **last** JSON object whose keys are exactly the batch files (the model appends a corrected copy after the first one); parsing happens on every read of a cached record, so a parser fix costs nothing. Local only.
+  - **`ocr/vision.py`** (#91) — vision check **inside the tract** (`ingest(..., vision=МОДЕЛЬ)`, CLI `--vision`): the whole markdown is cut into windows (stride 3 tokens ± 3 context), each window is placed on its `content_list` block on the physical page (`*_model.json`, page seam — two tiles, as in #90); the model (`claude -p`, default `claude-opus-5`) transcribes the page, `ocr.measure.run_measure` / `judge` compute the difference locally (`ocr/measure.py` is used as a library and not changed). Homoglyphs, punctuation and dashes are not hinted; a missing space at a punctuation mark is. A hint is a `vision_diff` finding only — the text is never changed. More than `PAGE_HINT_LIMIT = 15` hints on a page, no `claude`, no login, limit, timeout — `vision_skipped`, conversion goes on. Local only.
 
 OCR pipeline (mode `auto` in `Файлы -> Markdown`): `pdf_core.pdf_to_markdown_with_status` → `analyze_pdf_pages` (pypdf) → `ocr_auto_mode.convert_pdf_with_optional_ocr` → `ocr_converter.ocr_pdf_to_searchable_pdf` (`ocrmypdf --skip-text --deskew --rotate-pages -l rus+eng`) → `convert_with_markitdown` over the OCR text layer. Wired into the UI through `app.py` (`_convert_uploaded_file`). Mode `mineru` (PDF / DOCX / XLSX, #85): `_pdf_page_subset` (pypdf cuts the selected pages, PDF only) → `ocr.ingest.detect_route` on the cut → `ocr.ingest.ingest`; `verify` is passed only on MinerU routes (`scan`, `text_tables`).
 
@@ -154,7 +156,7 @@ Table cells with «Да», «Нет», «Отсутствует» get automatic 
 
 `convert.py` uses numbered comments `# ПРАВКА #N: …` to mark deliberate changes. New edits are numbered strictly ascending and marked the same way. This flat, in-file numbering *is* the edit history — there is no separate changelog or list elsewhere, README included.
 
-**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 и #85 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`, #86 — `pdf_core.py` + `ocr/gemini_verifier.py`, #87 — `ocr/measure.py`, #88 — `ocr/measure.py` + `pdf_core.py`, #89 — `ocr/claude_code_verifier.py` + `ocr/measure.py`, #90 — `ocr/measure.py` + `ocr/claude_code_verifier.py`. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
+**Known gap: `#25` does not exist in the code, and never did.** The file contains #1–#24, #26–#58 (#52–#53 в `ocr_converter.py`, #54 и #59 в `app.py`). Дальше нумерация продолжается вне `convert.py`: #60 в `pdf_core.py`, #61–#66 в `ocr/` (по одной правке на модуль, см. список модулей выше), #67–#70, #72, #74–#80 — исправления тракта в `ocr/*`, #71 — `conftest.py`, #73 и #85 — `app.py`, #84 — `ocr/board.py`, #81 — `ocr/ingest.py`, #82 и #83 — `ocr/board.py`, #86 — `pdf_core.py` + `ocr/gemini_verifier.py`, #87 — `ocr/measure.py`, #88 — `ocr/measure.py` + `pdf_core.py`, #89 — `ocr/claude_code_verifier.py` + `ocr/measure.py`, #90 — `ocr/measure.py` + `ocr/claude_code_verifier.py`, #91 — ocr/vision.py + ocr/ingest.py + ocr/cli.py + ocr/__init__.py + ocr/validate.py. Do not assign #25 retroactively and do not treat its absence as something to "fix" — it is a permanently skipped number, not a missing edit to restore. Column alignment from `:----` separators was never implemented — the separator row is simply filtered out.
 
 ## Known issues
 
@@ -168,7 +170,7 @@ Documented long-standing limits: column alignment from `:----` separators is not
 Смысл исходника не меняется: чинятся только известные артефакты OCR, остальное помечается.
 
 **Вызов (из корня репозитория):**
-`python -m ocr.cli ВХОД.(pdf|docx|xlsx) --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--annotate-all] [--cache local|drive]`
+`python -m ocr.cli ВХОД.(pdf|docx|xlsx) --out ПАПКА [--engine mineru|ocrmypdf] [--mode vlm|pipeline] [--verify] [--annotate] [--annotate-all] [--cache local|drive] [--vision [МОДЕЛЬ]]`
 
 **Вход (ПРАВКА #81):** `.pdf`, `.docx`, `.xlsx` — через `ocr.ingest.ingest`. PDF без текстового слоя хотя бы
 на одной странице и текстовый PDF с таблицами идут в MinerU; текстовый PDF без таблиц, DOCX и XLSX —
@@ -220,10 +222,16 @@ Documented long-standing limits: column alignment from `:----` separators is not
 не вставляются (их десятки, в `report.json` они есть все) — для полной картины `--annotate-all`.
 Находки, чей фрагмент в тексте не нашёлся, уходят в конец файла, в раздел «Не привязанные находки».
 `--cache drive` пока не реализован.
+`--vision [МОДЕЛЬ]` (ПРАВКА #91) — сверка по картинке через Claude Code (`claude -p`, только локально, где
+`claude` установлен и залогинен; флаг сам по себе согласие на расход подписки, `CLAUDE_CODE_LIVE` не нужен).
+Без значения — `claude-opus-5`. Только маршруты MinerU (`scan`, `text_tables`), иначе ошибка; с `--verify`
+независим. Подсказки — находки `vision_diff` (`warning`, код `2` не дают), текст не меняется; сбои и покрытие —
+`vision_skipped`. Прогресс по страницам — в stderr.
 
-**report.json:** `findings[]` = `{id, rule, severity, page, snippet, suggestion}`.
+**report.json (схема v2, ПРАВКА #91):** `findings[]` = `{id, rule, severity, page, snippet, suggestion, reading, model}`.
 `snippet` — дословный фрагмент `out.md`; `suggestion` — что предлагает тракт или что увидел второй прогон;
-`page` — страница PDF или `null`.
+`page` — страница PDF или `null`; `reading` — окно прочтения модели по скану (у `vision_diff`), `model` — модель
+сверки (у `vision_*`); у прочих правил оба `null`.
 
 ## Constraints
 
@@ -235,7 +243,9 @@ Documented long-standing limits: column alignment from `:----` separators is not
 
 OCR `auto` is implemented and wired into the UI, but `ocrmypdf` is **not** in `requirements.txt` and there is no `packages.txt`. On Streamlit Community Cloud the system Tesseract/Ghostscript binaries are unavailable, so `auto` is **not offered** there at all (`_ocr_mode_options`, #73); the working OCR path in production is MinerU. Packaging `ocrmypdf` stays a separate task — do not add `ocrmypdf` to `requirements.txt` or create `packages.txt` as part of unrelated work. Since #53 the Ghostscript check is at least honest on Linux: if `gs` is on PATH it reports `ok`, instead of always failing on the Windows-only `gswin64c`.
 
-The Claude Code verification backend (#89) is **local only**: Streamlit Cloud has neither the `claude` binary nor a subscription login. `app.py` and the tract do not know about it; `python -m ocr.measure` is a tool for the human and the agent on the local machine.
+The Claude Code verification backend (#89) is **local only**: Streamlit Cloud has neither the `claude` binary nor a subscription login. `app.py` and the tract do not know about it; `python -m ocr.measure` is a tool for the human and the agent on the local machine. The same holds for the vision
+check in the tract (#91, `--vision`): local only; any failure of it is a `vision_skipped` finding, the conversion
+itself never fails because of it.
 
 ## Secrets
 

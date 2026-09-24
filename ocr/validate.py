@@ -9,7 +9,7 @@ from itertools import permutations
 from ocr import SEVERITIES, Finding
 from ocr.postprocess import fold_to_cyrillic, parse_pipe_tables
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2        # ПРАВКА #91: у находки + reading, model
 ANNOTATION_PREFIX = "!! ПРОВЕРИТЬ: "
 ANNOTATION_SUFFIX = " !!"
 # ПРАВКА #70: находки без места в тексте — в хвост документа, своим разделом
@@ -332,7 +332,7 @@ def build_report(*, source: str, sha256: str, provider: str,
                  model_version: str | None, cache_hit: bool, verified: bool,
                  findings: list[Finding],
                  content_list: list | None = None) -> dict:
-    """report.json схемы v1: ключи верхнего уровня и ключи находки — закрытые списки."""
+    """report.json схемы v2 (ПРАВКА #91: + reading, model): ключи верхнего уровня и ключи находки — закрытые списки."""
     items = []
     summary = {severity: 0 for severity in SEVERITIES}
     for index, finding in enumerate(findings, 1):
@@ -341,7 +341,8 @@ def build_report(*, source: str, sha256: str, provider: str,
             page = page_of(finding.snippet, content_list)
         items.append({"id": index, "rule": finding.rule, "severity": finding.severity,
                       "page": page, "snippet": finding.snippet,
-                      "suggestion": finding.suggestion})
+                      "suggestion": finding.suggestion,
+                      "reading": finding.reading, "model": finding.model})    # ПРАВКА #91
         summary[finding.severity] += 1
     return {
         "schema_version": REPORT_SCHEMA_VERSION,

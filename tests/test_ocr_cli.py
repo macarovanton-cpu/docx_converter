@@ -179,7 +179,9 @@ def test_main_writes_files_and_one_json_line(tmp_path, monkeypatch, capsys):
     assert Path(summary["out_md"]).is_absolute()
     assert Path(summary["out_md"]).read_text(encoding="utf-8") == postprocess(vlm)[0]
     on_disk = json.loads(Path(summary["report"]).read_text(encoding="utf-8"))
-    assert on_disk["schema_version"] == 1 and on_disk["source"] == "bakeoff.pdf"
+    assert on_disk["schema_version"] == 2 and on_disk["source"] == "bakeoff.pdf"     # ПРАВКА #91
+    assert all(list(f) == ["id", "rule", "severity", "page", "snippet", "suggestion", "reading", "model"]
+               for f in on_disk["findings"])
     # не \uXXXX: отчёт читает человек
     assert "Сиражитдинов" in Path(summary["report"]).read_text(encoding="utf-8")
 

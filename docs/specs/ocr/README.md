@@ -27,6 +27,7 @@
 | `13-verifier-measure.md` | `pdf_core.py` (`Verifier`), `ocr/gemini_verifier.py`, `ocr/measure.py` (измерение vision-сверки; в тракт не подключено) | **#86**, **#87** |
 | `14-verifier-claude-code.md` | `pdf_core.py` (`Verifier.transcribe`), `ocr/measure.py` (полосы, транскрипция, локальный вердикт, `--verifier/--model/--fixture`), `ocr/claude_code_verifier.py` (`claude -p`, только локально) | **#88**, **#89** |
 | `15-measure-fix.md` | `ocr/measure.py` (физическая страница по `*_model.json`, стык страниц, `narrow`, промах кэша не стоп, выходы `v3`), `ocr/claude_code_verifier.py` (`parse_texts`, `SYSTEM_PROMPT`) | **#90** |
+| `16-vision-in-tract.md` | `ocr/vision.py` (сверка по картинке в тракте: окна по всему документу, `claude -p`, локальный diff), `ocr/ingest.py` (`vision`, `vision_progress`), `ocr/cli.py` (`--vision [МОДЕЛЬ]`), `ocr/__init__.py` (`Finding.reading` / `Finding.model`), `ocr/validate.py` (`report.json` v2) | **#91** |
 
 Номера закреплены заранее: 01 и 04 независимы и могут идти параллельно, без
 закрепления они бы столкнулись. Фактическая последняя правка в коде на момент
@@ -89,7 +90,7 @@
 вторая файл не перезаписывает. Содержимое дословно:
 
 ```python
-"""ПРАВКА #61/#63: OCR-тракт MinerU. Общие типы."""
+"""ПРАВКА #61/#63: OCR-тракт MinerU. Общие типы. ПРАВКА #91: reading, model."""
 
 from dataclasses import dataclass
 
@@ -103,7 +104,12 @@ class Finding:
     page: int | None         # 1-based; None — страница неизвестна
     snippet: str             # дословный фрагмент из markdown, по нему ищется место пометки
     suggestion: str | None = None
+    reading: str | None = None     # ПРАВКА #91: vision_diff — окно прочтения модели по скану
+    model: str | None = None       # ПРАВКА #91: vision_* — модель сверки по картинке
 ```
+
+`report.json` с ПРАВКИ #91 — схема v2: у каждой находки ровно восемь ключей
+`{id, rule, severity, page, snippet, suggestion, reading, model}`; у правил, кроме `vision_*`, `reading` и `model` — `null`.
 
 ### Правила и их серьёзность (закрытый список)
 
@@ -132,6 +138,8 @@ class Finding:
 | `recovered_block` | info | 04 (#74) | текстовые блоки `content_list`, которых нет в `full.md`, возвращены в markdown — сверить со сканом |
 | `code_digits_glued` | warning | 05 (#79) | к номеру стандарта прилип номер следующего пункта («СП 76.13330.20163.») |
 | `org_name_variant` | warning | 05 (#80) | название организации в кавычках отличается от частого варианта на одну букву |
+| `vision_diff` | warning | 16 (#91) | прочитанное моделью по скану расходится с текстом (не гомоглифы и не пунктуация); текст не меняется |
+| `vision_skipped` | warning | 16 (#91) | сверка по картинке не выполнена или выполнена не везде: причина, страницы, покрытие окон |
 
 ### Фикстуры
 
@@ -193,3 +201,8 @@ zip и `content_list.json` появились после живого прого
     `*_model.json` может разойтись с `content_list` (на 22.09.2026 таких окон нет: единственное, textpdf1-c11,
     заменено следующим кандидатом); продолжение таблицы определяется по пустому `table_body`; стык сверяется глазами
     по полосам до живого добора; уберёт ли `SYSTEM_PROMPT` дописанную копию JSON — покажет добор.
+11. Спека 16 (сверка по картинке в тракте, #91): `VISION_STRIDE = 3` (окно — 9 токенов); `PAGE_HINT_LIMIT = 15` —
+    пересмотреть по живой проверке; `narrow` в тракте судится по полосам своего блока (в замере — служебный исход);
+    непривязанные окна (17 % у textpdf1, 2–3 % у сканов — markdown прошёл `postprocess`, а `locate_block` ищет по
+    тексту `content_list`) честно считаются в `vision_skipped`; страница у стыка — первая из двух; оценка ложных
+    подсказок (≈0.7 на страницу) держится на одном событии — первую настоящую долю даст живая проверка человека.
