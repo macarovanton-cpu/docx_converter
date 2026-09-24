@@ -383,3 +383,149 @@ def test_result_keys_closed(monkeypatch, tmp_path):
 
 def test_app_no_longer_imports_run_pipeline():
     assert not hasattr(app, "run_pipeline")
+
+
+# --- ПРАВКА #92: сверка по картинке ---------------------------------------------
+
+import subprocess                                                   # noqa: E402
+
+import ocr.vision                                                   # noqa: E402
+from ocr import Finding                                             # noqa: E402
+from ocr.vision import VISION_MODEL                                 # noqa: E402
+
+
+@pytest.fixture
+def no_claude(monkeypatch):
+    """ПРАВКА #92: реальный claude не запускается ни в одном тесте блока."""
+    def refuse(*args, **kwargs):
+        raise AssertionError("тест запустил subprocess")
+    monkeypatch.setattr(subprocess, "run", refuse)
+
+
+_no_claude = pytest.mark.usefixtures("no_claude")
+
+
+class _FakeStatus:
+    def __init__(self):
+        self.labels = []
+
+    def update(self, label=None, state=None):
+        self.labels.append(label)
+
+
+def _fake_vision(monkeypatch):
+    """Подмена ocr.vision.vision_findings: прогресс по двум страницам и одна vision_diff. Журнал вызовов."""
+    calls: list[dict] = []
+
+    def fake(md, pdf_bytes, zip_bytes, *, source_name, model=VISION_MODEL, progress=None):
+        calls.append({"source_name": source_name, "model": model})
+        if progress is not None:
+            progress(1, 1, 2)
+            progress(4, 2, 2)
+        return [Finding(rule="vision_diff", severity="warning", page=1, snippet="Текст договора",
+                        suggestion="Текст договоров", reading="… Текст договоров …", model=model)]
+
+    monkeypatch.setattr(ocr.vision, "vision_findings", fake)
+    return calls
+
+
+def test_claude_available_follows_find_claude(monkeypatch):
+    def missing():
+        raise app.ClaudeCodeMissingError("нет")
+    monkeypatch.setattr(app, "find_claude", missing)
+    app._claude_available.clear()
+    assert app._claude_available() is False
+    monkeypatch.setattr(app, "find_claude", lambda: "C:/x/claude.cmd")
+    app._claude_available.clear()
+    assert app._claude_available() is True
+    app._claude_available.clear()                       # не оставлять состояние другим тестам
+
+
+def test_vision_progress_without_status_is_none():
+    assert app._vision_progress(None) is None
+
+
+def test_vision_rows():
+    f = {"page": 3, "snippet": "IP65не", "reading": "… IP65 не ниже …", "suggestion": "IP65 не", "model": "m"}
+    d = dict(f, snippet="лишнее", suggestion="")
+    assert app._vision_rows([f, d]) == [
+        {"Страница": 3, "Было": "IP65не", "По скану": "… IP65 не ниже …", "Стало": "IP65 не"},
+        {"Страница": 3, "Было": "лишнее", "По скану": "… IP65 не ниже …", "Стало": "∅"}]
+
+
+@_offline
+@_no_claude
+def test_mineru_mode_vision_passes_model_and_progress(monkeypatch, tmp_path):
+    _fake_mineru(monkeypatch, tmp_path, vlm="# Договор\n\nТекст договора.")
+    calls = _fake_vision(monkeypatch)
+    status = _FakeStatus()
+
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
+                                        ocr_mode="mineru", vision=True, status=status)
+
+    assert result["error"] is None
+    assert result["report"]["schema_version"] == 2
+    vision = [f for f in result["report"]["findings"] if f["rule"].startswith("vision_")]
+    assert len(vision) == 1 and vision[0]["rule"] == "vision_diff"
+    assert vision[0]["reading"] and vision[0]["model"] == VISION_MODEL
+    assert [c["model"] for c in calls] == [VISION_MODEL]
+    progress = [label for label in status.labels if label and "из 2" in label]
+    assert progress == ["Сверка по картинке: стр. 1 (1 из 2)…", "Сверка по картинке: стр. 4 (2 из 2)…"]
+    assert set(result) == RESULT_KEYS
+
+
+@_offline
+@_no_claude
+def test_mineru_mode_without_vision_does_not_call_it(monkeypatch, tmp_path):
+    _fake_mineru(monkeypatch, tmp_path, vlm="# Договор\n\nТекст договора.")
+    calls = _fake_vision(monkeypatch)
+
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
+                                        ocr_mode="mineru", vision=False, status=_FakeStatus())
+
+    assert result["error"] is None and calls == []
+    assert not [f for f in result["report"]["findings"] if f["rule"].startswith("vision_")]
+
+
+@_offline
+@_no_claude
+@pytest.mark.parametrize("name, data", [("док.docx", _docx_bytes()), ("табл.xlsx", _xlsx_bytes())],
+                         ids=["docx", "xlsx"])
+def test_vision_skipped_outside_mineru_routes(monkeypatch, tmp_path, name, data):
+    _fake_mineru(monkeypatch, tmp_path, vlm="не должен понадобиться")
+    calls = _fake_vision(monkeypatch)
+    result = app._convert_uploaded_file(_FakeUpload(name, data), None, ocr_mode="mineru", vision=True)
+    assert result["error"] is None                              # не ValueError
+    assert result["route"] == "office" and calls == []
+
+
+@_offline
+@_no_claude
+def test_vision_skipped_on_text_pdf(monkeypatch, tmp_path):
+    pdf = require_fixture("textpdf1.pdf").read_bytes()          # стр. 1-2: слой есть, таблиц нет (спека 09)
+    _fake_mineru(monkeypatch, tmp_path, vlm="x")
+    calls = _fake_vision(monkeypatch)
+    result = app._convert_uploaded_file(_FakeUpload("т.pdf", pdf), "1-2", ocr_mode="mineru", vision=True)
+    assert result["error"] is None
+    assert result["route"] == "text" and calls == []
+
+
+@_offline
+@_no_claude
+def test_vision_failure_keeps_conversion(monkeypatch, tmp_path):
+    _fake_mineru(monkeypatch, tmp_path, vlm="# Договор\n\nТекст договора.")   # zip только с full.md
+    made: list[str] = []
+
+    def broken_verifier(model):
+        made.append(model)
+        raise AssertionError("верификатор не должен создаваться без content_list")
+    monkeypatch.setattr(ocr.vision, "make_verifier", broken_verifier)
+
+    result = app._convert_uploaded_file(_FakeUpload("скан.pdf", _blank_pdf(1)), None,
+                                        ocr_mode="mineru", vision=True, status=_FakeStatus())
+
+    assert result["error"] is None and "Текст договора." in result["markdown"]
+    skipped = [f for f in result["report"]["findings"] if f["rule"] == "vision_skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["suggestion"].startswith("сверка не выполнена: ValueError: ")
+    assert made == []

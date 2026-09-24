@@ -22,6 +22,8 @@ from ocr.cache import LocalCache
 from ocr.ingest import detect_route, ingest  # ПРАВКА #85: UI зовёт единый вход, не run_pipeline
 from ocr.mineru_provider import MineruAuthError, MineruProvider
 from ocr.validate import ANNOTATION_PREFIX
+from ocr.claude_code_verifier import ClaudeCodeMissingError, find_claude   # ПРАВКА #92
+from ocr.vision import VISION_MODEL                                        # ПРАВКА #92
 from ocr_auto_mode import pdf_pages_without_text_layer
 from ocr_converter import check_ocr_dependencies
 from pdf_core import pdf_to_markdown_with_status
@@ -276,6 +278,36 @@ def _ocrmypdf_available() -> bool:
     return all(check["ok"] for check in check_ocr_dependencies().values())
 
 
+_VISION_RULE = "vision_diff"                # ПРАВКА #92: подсказки — своим блоком, не в общей таблице
+
+
+@st.cache_resource(show_spinner=False)
+def _claude_available() -> bool:
+    """ПРАВКА #92: сверка по картинке — только где есть claude; на Streamlit Cloud его нет."""
+    try:
+        find_claude()
+    except ClaudeCodeMissingError:
+        return False
+    return True
+
+
+def _vision_progress(status):
+    """ПРАВКА #92: vision_progress для ingest — метка st.status по страницам; без status — None."""
+    if status is None:
+        return None
+
+    def update(page: int, done: int, total: int) -> None:
+        status.update(label=f"Сверка по картинке: стр. {page} ({done} из {total})…")
+
+    return update
+
+
+def _vision_rows(findings: list[dict]) -> list[dict]:
+    """ПРАВКА #92: подсказки сверки по картинке — страница, было, по скану, стало."""
+    return [{"Страница": f["page"], "Было": f["snippet"], "По скану": f["reading"],
+             "Стало": f["suggestion"] or "∅"} for f in findings]
+
+
 def _mineru_api_key() -> str | None:
     """st.secrets, затем окружение. Нет secrets.toml — FileNotFoundError, нет ключа — KeyError."""
     try:
@@ -350,9 +382,14 @@ def _findings_table(findings: list[dict]) -> list[dict]:
 
 
 def _render_ocr_report(report: dict) -> None:
-    """Блок находок под результатом: сводка, список, low_confidence отдельно."""
+    """Блок находок под результатом: сводка, список, low_confidence отдельно.
+
+    ПРАВКА #92: подсказки vision_diff — отдельным блоком; vision_skipped остаётся в общем списке.
+    """
     summary = report["summary"]
     main, low_conf = _split_findings(report)
+    hints = [f for f in main if f["rule"] == _VISION_RULE]      # ПРАВКА #92
+    main = [f for f in main if f["rule"] != _VISION_RULE]
     line = (f"Находки: critical — {summary['critical']}, "
             f"warning — {summary['warning']}, info — {summary['info']}"
             + (" (результат из кэша)" if report["cache_hit"] else ""))
@@ -370,10 +407,16 @@ def _render_ocr_report(report: dict) -> None:
                          expanded=False):
             st.dataframe(_findings_table(low_conf), use_container_width=True,
                          hide_index=True)
+    if hints:       # ПРАВКА #92
+        with st.expander(f"Сверка по картинке — подсказки ({len(hints)})", expanded=False):
+            st.caption(f"Модель {hints[0]['model']} переписала страницы скана; здесь — места, где прочитанное "
+                       "расходится с текстом. Текст не изменён. Гомоглифы, пунктуация и тире не подсказываются.")
+            st.dataframe(_vision_rows(hints), use_container_width=True, hide_index=True)
 
 
 def _convert_uploaded_file(uploaded_file, page_range: str | None,
                            ocr_mode: str = "off", *, verify: bool = False,
+                           vision: bool = False,                 # ПРАВКА #92
                            annotate: bool = True, status=None) -> dict:
     ext = _file_ext(uploaded_file.name)
     if ext != "pdf":
@@ -403,7 +446,10 @@ def _convert_uploaded_file(uploaded_file, page_range: str | None,
                     data, source_name=uploaded_file.name, work_dir=Path(work_dir),
                     verify=verify and route in _MINERU_ROUTES, annotate=annotate,
                     cache=LocalCache(_OCR_CACHE_ROOT),
-                    provider_factory=_mineru_provider_factory(_mineru_api_key(), status))
+                    provider_factory=_mineru_provider_factory(_mineru_api_key(), status),
+                    # ПРАВКА #92: сверка по картинке — только на маршрутах MinerU (на text/office ingest бросил бы ValueError)
+                    vision=VISION_MODEL if vision and route in _MINERU_ROUTES else None,
+                    vision_progress=_vision_progress(status))
         elif ext == "pdf":
             markdown, ocr_status = pdf_to_markdown_with_status(
                 uploaded_file.getvalue(), page_range=page_range, mode=ocr_mode)
@@ -667,6 +713,7 @@ def render_files_to_markdown_mode():
         ),
     )
     verify = False
+    vision = False      # ПРАВКА #92
     annotate = True
     if ocr_mode == "off":
         st.caption("OCR выключен: используется текущий MarkItDown flow.")
@@ -690,6 +737,15 @@ def render_files_to_markdown_mode():
             help="Второй прогон другой моделью MinerU, расхождения попадают в "
                  "находки. Удваивает время и расход квоты.",
         )
+        if _claude_available():     # ПРАВКА #92: на Streamlit Cloud claude нет — галочки нет
+            vision = st.checkbox(
+                "Сверка по картинке (Claude Code, локально)",
+                value=False,
+                key="files_to_md_vision",
+                help="Каждая страница скана или PDF с таблицами переписывается моделью "
+                     f"{VISION_MODEL} через claude -p; расхождения с текстом — подсказки в находках, "
+                     "текст не меняется. Одна страница — один вызов подписки Claude Code; повтор — из кэша.",
+            )
         annotate = st.checkbox(
             "Пометки в тексте",
             value=True,
@@ -815,7 +871,8 @@ def render_files_to_markdown_mode():
                     with st.status(f"OCR-тракт: {uploaded_file.name}…") as status:
                         result = _convert_uploaded_file(
                             uploaded_file, page_range, ocr_mode=ocr_mode,
-                            verify=verify, annotate=annotate, status=status)
+                            verify=verify, vision=vision,   # ПРАВКА #92
+                            annotate=annotate, status=status)
                         if result["error"]:
                             status.update(
                                 label=f"OCR-тракт: {uploaded_file.name} — ошибка",
@@ -902,6 +959,9 @@ def render_files_to_markdown_mode():
                 if (st.session_state.get("files_to_md_mineru_verify")
                         and route not in _MINERU_ROUTES):
                     st.caption("Сверка вторым прогоном не применялась: файл не шёл через MinerU.")
+                if (st.session_state.get("files_to_md_vision")      # ПРАВКА #92
+                        and route not in _MINERU_ROUTES):
+                    st.caption("Сверка по картинке не применялась: файл не шёл через MinerU.")
             report = result.get("report")
             if report:
                 _render_ocr_report(report)

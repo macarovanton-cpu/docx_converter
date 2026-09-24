@@ -28,6 +28,7 @@
 | `14-verifier-claude-code.md` | `pdf_core.py` (`Verifier.transcribe`), `ocr/measure.py` (полосы, транскрипция, локальный вердикт, `--verifier/--model/--fixture`), `ocr/claude_code_verifier.py` (`claude -p`, только локально) | **#88**, **#89** |
 | `15-measure-fix.md` | `ocr/measure.py` (физическая страница по `*_model.json`, стык страниц, `narrow`, промах кэша не стоп, выходы `v3`), `ocr/claude_code_verifier.py` (`parse_texts`, `SYSTEM_PROMPT`) | **#90** |
 | `16-vision-in-tract.md` | `ocr/vision.py` (сверка по картинке в тракте: окна по всему документу, `claude -p`, локальный diff), `ocr/ingest.py` (`vision`, `vision_progress`), `ocr/cli.py` (`--vision [МОДЕЛЬ]`), `ocr/__init__.py` (`Finding.reading` / `Finding.model`), `ocr/validate.py` (`report.json` v2) | **#91** |
+| `17-vision-in-ui.md` | `app.py` (сверка по картинке в режиме MinerU: галочка при найденном `claude`, прогресс по страницам в `st.status`, блок подсказок `vision_diff`) | **#92** |
 
 Номера закреплены заранее: 01 и 04 независимы и могут идти параллельно, без
 закрепления они бы столкнулись. Фактическая последняя правка в коде на момент
